@@ -1,0 +1,6 @@
+.env
+__pycache__/
+target/
+maps/**
+!maps/**/
+!maps/**/.gitkeep
