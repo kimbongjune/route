@@ -1,0 +1,11 @@
+[workspace]
+resolver = "3"
+members = [
+    "routedb/core",
+    "routedb/importer-knl",
+    "nav/api",
+    "nav/collector",
+]
+
+[workspace.package]
+edition = "2024"
