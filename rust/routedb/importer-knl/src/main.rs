@@ -59,7 +59,7 @@ fn main() {
         let result = dijkstra::shortest_path(file.first_out(), file.head(), file.length(), from, to);
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         match result {
-            Some((dist, edges)) => println!("{} {:.0}m 링크 {}개 ({:.0}ms)", name, dist, edges.len(), elapsed),
+            Some((dist, edges, _)) => println!("{} {:.0}m 링크 {}개 ({:.0}ms)", name, dist, edges.len(), elapsed),
             None => println!("{} 경로 없음 ({:.0}ms)", name, elapsed),
         }
     }

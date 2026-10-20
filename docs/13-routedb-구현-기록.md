@@ -1,13 +1,14 @@
 # 13. routedb 구현 기록
 
-구현 순서의 2단계 임포터, 3단계 저장 계층, 4단계 다익스트라까지 구현하였다.
+구현 순서의 2단계 임포터, 3단계 저장 계층, 4단계 다익스트라와 A*까지 구현하였다.
 
 ```
 rust/
   routedb/core/src/
     graph.rs                Graph 구조체, CSR 구성
     hilbert.rs              힐베르트 순번, 정렬
-    dijkstra.rs             최단 경로
+    dijkstra.rs             다익스트라 최단 경로
+    astar.rs                A* 최단 경로
     file.rs                 그래프 파일 저장, mmap 열기
   routedb/core/examples/
     csr_demo.rs             CSR 단계별 출력
@@ -18,6 +19,7 @@ rust/
     coord.rs                TM에서 WGS84 변환
   routedb/importer-knl/examples/
     order_bench.rs          shp 순서와 힐베르트 순서의 탐색 시간 비교
+    astar_bench.rs          다익스트라와 A*의 결과와 탐색 시간 비교
 ```
 
 ## 크레이트
@@ -102,6 +104,20 @@ first_out   [0, 2, 4, 6, 7, 7]
 
 길이 기준 최단 경로이며 제한속도와 회전 제한은 아직 반영하지 않았고, 일방통행은 링크 방향으로 반영되어 있다.
 
+## A*
+
+다익스트라는 출발지를 중심으로 모든 방향으로 균등하게 탐색하므로 도착지 반대편의 교차로까지 방문하게 된다. A*는 우선순위 큐의 정렬 기준을 출발지로부터의 거리에 도착지까지의 추정 거리를 더한 값으로 바꾸어 도착지 방향의 교차로를 먼저 꺼내는 알고리즘으로, 추정 거리가 실제 도로 거리보다 크지 않으면 다익스트라와 같은 최단 경로를 구한다. 추정 거리는 두 교차로 위경도 사이의 대원 거리를 `haversine_m`으로 계산하였으며 도로 길이는 대원 거리보다 항상 길거나 같으므로 이 조건을 만족한다.
+
+`astar::shortest_path`는 다익스트라와 같은 배열에 `lat`, `lon`을 추가로 입력받으며 힙에 넣는 값만 `dist + h(v)`로 바꾸었고, 두 알고리즘 모두 방문한 교차로 수를 함께 반환하도록 하였다. 그래프 파일을 열어 비교한 결과는 다음과 같으며 두 구간과 무작위 300쌍 모두에서 거리와 경로가 일치함을 확인하였다.
+
+| 구간 | 다익스트라 시간 | 다익스트라 방문 교차로 | A* 시간 | A* 방문 교차로 |
+|---|---|---|---|---|
+| 서울역 → 강남역사거리 10,139m | 3ms | 17,731 | 2ms | 973 |
+| 서울역 → 부산역 384,412m | 67ms | 1,072,769 | 56ms | 502,719 |
+| 무작위 300쌍 평균 | 29.8ms | 588,461 | 22.2ms | 152,415 |
+
+단거리에서는 방문 교차로가 17,731개에서 973개로 18분의 1로 줄었지만, 서울에서 부산까지는 대원 거리 328km에 대해 도로 거리가 384km로 추정 거리가 실제보다 15% 짧아 교차로 118만 개 중 50만 개를 방문하였다. 추정 거리가 정확할수록 방문 수가 줄어드는 A*의 특성상 단거리에서 효과가 크고 장거리에서는 방문 수가 절반 정도로만 줄어 CCH가 필요함을 확인하였다.
+
 ## 그래프 파일
 
 임포터를 실행할 때마다 shp를 읽어 그래프를 구성하면 7초가 소요되므로 구성한 그래프를 파일로 저장하여 경로 탐색 시에는 파일만 열도록 하였다. 직렬화 라이브러리로 저장하면 열 때 파일 전체를 읽어 구조체로 복사해야 하는 반면, 헤더 뒤에 배열을 정해진 순서로 기록하면 헤더의 교차로 수와 간선 수만으로 각 배열의 파일 내 위치가 계산되어 mmap으로 열어 복사 없이 바로 사용할 수 있기 때문에 별도 파일 구조를 정의하는 방식을 선택하였다. 배열을 고정 위치에 두고 복사 없이 읽는 이 방식은 FlatBuffers 같은 zero-copy 직렬화 형식과 RoutingKit의 CSR 배열 저장 방식에서 사용하는 것으로, 같은 방식을 채택하여 구조를 정하였다. 저장은 `BufWriter`로 감싼 `File`에 `write_all`로 기록하였는데, `std::fs::write`는 배열 7개를 `Vec<u8>` 하나로 복사해야 하고 `File`에 직접 기록하면 호출마다 시스템 콜이 발생하기 때문이다.
@@ -143,7 +159,7 @@ MAGIC은 파일 종류를 식별하는 고정 값이며 `\0`을 붙여 8바이�
 
 ## 테스트
 
-`cargo test --workspace`로 12개를 실행한다.
+`cargo test --workspace`로 15개를 실행한다.
 
 | 파일 | 테스트 | 확인 내용 |
 |---|---|---|
@@ -153,6 +169,7 @@ MAGIC은 파일 종류를 식별하는 고정 값이며 `\0`을 붙여 8바이�
 | `graph.rs` | `build_demo_graph` | 데모 그래프의 `first_out`, `head`, `length`, 좌표 |
 | `hilbert.rs` | `order1`, `next_index_is_neighbor_cell` | 2×2 순서, 순번이 이어지는 칸끼리 인접 |
 | `dijkstra.rs` | `shortest_from_ga_to_ma`, `unreachable`, `same_node` | 더 짧은 경로 선택, 경로 없음, 출발과 도착이 같음 |
+| `astar.rs` | `haversine_seoul_busan`, `same_result_as_dijkstra`, `unreachable` | 서울역·부산역 대원 거리, 다익스트라와 같은 경로, 경로 없음 |
 | `file.rs` | `write_and_open_same_graph`, `open_other_file` | 저장 후 다시 열면 배열 7개 일치, 다른 파일은 에러 |
 
 ## 실행
@@ -165,4 +182,5 @@ cargo test --workspace
 cargo run -p routedb-core --example csr_demo
 cargo run -p routedb-core --example hilbert_demo
 cargo run --release -p importer-knl --example order_bench
+cargo run --release -p importer-knl --example astar_bench
 ```
