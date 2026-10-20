@@ -20,6 +20,8 @@ pub struct Segment {
     pub edge: u32,
     pub a: [f64; 2],
     pub b: [f64; 2],
+    /// 간선 시작점에서 a까지의 거리(m)
+    pub offset_a: f64,
 }
 
 impl Segment {
@@ -57,6 +59,8 @@ pub struct Snap {
     /// 간선 위에 투영한 위치의 위도, 경도
     pub lat: f64,
     pub lon: f64,
+    /// 간선 시작점에서 투영한 위치까지의 거리(m)
+    pub offset_m: f64,
 }
 
 /// 링크 선분 R-tree
@@ -70,8 +74,11 @@ impl LinkIndex {
         let mut segments = Vec::with_capacity(geom_lat.len());
         for e in 0..geom_first.len() - 1 {
             let (s, t) = (geom_first[e] as usize, geom_first[e + 1] as usize);
+            let mut offset_a = 0.0;
             for i in s..t.saturating_sub(1) {
-                segments.push(Segment { edge: e as u32, a: to_xy(geom_lat[i], geom_lon[i]), b: to_xy(geom_lat[i + 1], geom_lon[i + 1]) });
+                let (a, b) = (to_xy(geom_lat[i], geom_lon[i]), to_xy(geom_lat[i + 1], geom_lon[i + 1]));
+                segments.push(Segment { edge: e as u32, a, b, offset_a });
+                offset_a += ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
             }
         }
         Self { tree: RTree::bulk_load(segments) }
@@ -83,11 +90,26 @@ impl LinkIndex {
 
     /// 위경도에서 가장 가까운 간선을 찾는다.
     pub fn nearest(&self, lat: f64, lon: f64) -> Option<Snap> {
+        self.nearest_n(lat, lon, 1).pop()
+    }
+
+    /// 위경도에서 가까운 순서로 서로 다른 간선 n개를 찾는다.
+    pub fn nearest_n(&self, lat: f64, lon: f64, n: usize) -> Vec<Snap> {
         let p = to_xy(lat, lon);
-        let seg = self.tree.nearest_neighbor(p)?;
-        let (q, _) = seg.project(p);
-        let (lat, lon) = to_latlon(q);
-        Some(Snap { edge: seg.edge, distance_m: seg.distance_2(&p).sqrt(), lat, lon })
+        let mut snaps: Vec<Snap> = Vec::with_capacity(n);
+        for seg in self.tree.nearest_neighbor_iter(p) {
+            if snaps.iter().any(|s| s.edge == seg.edge) {
+                continue;
+            }
+            let (q, t) = seg.project(p);
+            let (lat, lon) = to_latlon(q);
+            let seg_len = ((seg.b[0] - seg.a[0]).powi(2) + (seg.b[1] - seg.a[1]).powi(2)).sqrt();
+            snaps.push(Snap { edge: seg.edge, distance_m: seg.distance_2(&p).sqrt(), lat, lon, offset_m: seg.offset_a + t * seg_len });
+            if snaps.len() == n {
+                break;
+            }
+        }
+        snaps
     }
 }
 
@@ -109,6 +131,8 @@ mod tests {
         assert_eq!(s.edge, 0);
         assert!((s.distance_m - 11.1).abs() < 0.5, "{}", s.distance_m);
         assert!((s.lat - 37.000).abs() < 1e-9 && (s.lon - 127.001).abs() < 1e-9);
+        // 간선 0은 경도 0.002도 길이 약 180m이고 투영 위치는 그 중간이다
+        assert!((s.offset_m - 90.06).abs() < 0.1, "{}", s.offset_m);
 
         // 간선 1 옆
         let s = index.nearest(37.0015, 127.0021).unwrap();
