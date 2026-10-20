@@ -9,12 +9,12 @@ use crate::graph::Graph;
 
 /// 그래프 파일 맨 앞 8바이트
 pub const MAGIC: &[u8; 8] = b"ROUTEDB\0";
-pub const VERSION: u32 = 1;
-/// MAGIC 8 + VERSION 4 + 빈칸 4 + 교차로 수 8 + 간선 수 8
-pub const HEADER_LEN: usize = 32;
+pub const VERSION: u32 = 2;
+/// MAGIC 8 + VERSION 4 + 빈칸 4 + 교차로 수 8 + 간선 수 8 + 링크 좌표 수 8
+pub const HEADER_LEN: usize = 40;
 
 impl Graph {
-    /// 그래프를 헤더, 8바이트 배열(node_id, link_id, length, lat, lon), 4바이트 배열(first_out, head) 순서로 파일에 저장한다.
+    /// 그래프를 헤더, 8바이트 배열(node_id, link_id, length, lat, lon, geom_lat, geom_lon), 4바이트 배열(first_out, head, geom_first) 순서로 파일에 저장한다.
     pub fn write(&self, path: &Path) -> Result<()> {
         let mut w = BufWriter::new(File::create(path)?);
 
@@ -24,6 +24,7 @@ impl Graph {
         w.write_all(&0u32.to_le_bytes())?;
         w.write_all(&(self.node_count() as u64).to_le_bytes())?;
         w.write_all(&(self.edge_count() as u64).to_le_bytes())?;
+        w.write_all(&(self.geom_count() as u64).to_le_bytes())?;
 
         // 8바이트 배열
         w.write_all(bytemuck::cast_slice(&self.node_id))?;
@@ -31,10 +32,13 @@ impl Graph {
         w.write_all(bytemuck::cast_slice(&self.length))?;
         w.write_all(bytemuck::cast_slice(&self.lat))?;
         w.write_all(bytemuck::cast_slice(&self.lon))?;
+        w.write_all(bytemuck::cast_slice(&self.geom_lat))?;
+        w.write_all(bytemuck::cast_slice(&self.geom_lon))?;
 
         // 4바이트 배열
         w.write_all(bytemuck::cast_slice(&self.first_out))?;
         w.write_all(bytemuck::cast_slice(&self.head))?;
+        w.write_all(bytemuck::cast_slice(&self.geom_first))?;
 
         w.flush()
     }
@@ -45,8 +49,9 @@ pub struct GraphFile {
     mmap: Mmap,
     node_count: usize,
     edge_count: usize,
+    geom_count: usize,
     /// 배열별 파일 내 위치
-    ranges: [Range<usize>; 7],
+    ranges: [Range<usize>; 10],
 }
 
 impl GraphFile {
@@ -64,16 +69,20 @@ impl GraphFile {
         }
         let node_count = u64::from_le_bytes(mmap[16..24].try_into().unwrap()) as usize;
         let edge_count = u64::from_le_bytes(mmap[24..32].try_into().unwrap()) as usize;
+        let geom_count = u64::from_le_bytes(mmap[32..40].try_into().unwrap()) as usize;
 
-        // 배열별 크기로 파일 내 위치를 계산한다
+        // 배열별 파일 내 위치 계산
         let sizes = [
             8 * node_count,       // node_id
             8 * edge_count,       // link_id
             8 * edge_count,       // length
             8 * node_count,       // lat
             8 * node_count,       // lon
+            8 * geom_count,       // geom_lat
+            8 * geom_count,       // geom_lon
             4 * (node_count + 1), // first_out
             4 * edge_count,       // head
+            4 * (edge_count + 1), // geom_first
         ];
         let mut start = HEADER_LEN;
         let ranges = sizes.map(|size| {
@@ -84,7 +93,7 @@ impl GraphFile {
         if start != mmap.len() {
             return Err(Error::new(ErrorKind::InvalidData, format!("파일 크기가 {}바이트여야 하는데 {}바이트", start, mmap.len())));
         }
-        Ok(Self { mmap, node_count, edge_count, ranges })
+        Ok(Self { mmap, node_count, edge_count, geom_count, ranges })
     }
 
     pub fn node_count(&self) -> usize {
@@ -93,6 +102,10 @@ impl GraphFile {
 
     pub fn edge_count(&self) -> usize {
         self.edge_count
+    }
+
+    pub fn geom_count(&self) -> usize {
+        self.geom_count
     }
 
     pub fn node_id(&self) -> &[u64] {
@@ -115,18 +128,31 @@ impl GraphFile {
         bytemuck::cast_slice(&self.mmap[self.ranges[4].clone()])
     }
 
-    pub fn first_out(&self) -> &[u32] {
+    pub fn geom_lat(&self) -> &[f64] {
         bytemuck::cast_slice(&self.mmap[self.ranges[5].clone()])
     }
 
-    pub fn head(&self) -> &[u32] {
+    pub fn geom_lon(&self) -> &[f64] {
         bytemuck::cast_slice(&self.mmap[self.ranges[6].clone()])
+    }
+
+    pub fn first_out(&self) -> &[u32] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[7].clone()])
+    }
+
+    pub fn head(&self) -> &[u32] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[8].clone()])
+    }
+
+    pub fn geom_first(&self) -> &[u32] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[9].clone()])
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::LinkInput;
 
     fn demo() -> Graph {
         let nodes = [
@@ -136,15 +162,16 @@ mod tests {
             (1000000401, 37.001, 127.000),
             (1000000501, 37.002, 127.001),
         ];
-        let links = [
-            (1000001000, 1000000101, 1000000201, 100.0),
-            (1000001100, 1000000201, 1000000101, 100.0),
-            (1000002000, 1000000201, 1000000301, 100.0),
-            (1000002100, 1000000301, 1000000201, 100.0),
-            (1000003000, 1000000101, 1000000401, 50.0),
-            (1000004000, 1000000401, 1000000301, 80.0),
-            (1000005000, 1000000301, 1000000501, 100.0),
+        let mut links = vec![
+            LinkInput::new(1000001000, 1000000101, 1000000201, 100.0),
+            LinkInput::new(1000001100, 1000000201, 1000000101, 100.0),
+            LinkInput::new(1000002000, 1000000201, 1000000301, 100.0),
+            LinkInput::new(1000002100, 1000000301, 1000000201, 100.0),
+            LinkInput::new(1000003000, 1000000101, 1000000401, 50.0),
+            LinkInput::new(1000004000, 1000000401, 1000000301, 80.0),
+            LinkInput::new(1000005000, 1000000301, 1000000501, 100.0),
         ];
+        links[4].geometry = vec![(37.000, 127.000), (37.0005, 126.9995), (37.001, 127.000)];
         Graph::build(&nodes, &links).0
     }
 
@@ -164,6 +191,10 @@ mod tests {
         assert_eq!(f.lon(), g.lon.as_slice());
         assert_eq!(f.first_out(), g.first_out.as_slice());
         assert_eq!(f.head(), g.head.as_slice());
+        assert_eq!(f.geom_count(), g.geom_count());
+        assert_eq!(f.geom_first(), g.geom_first.as_slice());
+        assert_eq!(f.geom_lat(), g.geom_lat.as_slice());
+        assert_eq!(f.geom_lon(), g.geom_lon.as_slice());
 
         drop(f);
         std::fs::remove_file(&path).unwrap();

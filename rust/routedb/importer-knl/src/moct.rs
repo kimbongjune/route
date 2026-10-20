@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use routedb_core::graph::LinkInput;
 use shapefile::dbase::{FieldValue, Record};
 use shapefile::Shape;
 
@@ -34,17 +35,19 @@ pub fn read_nodes(folder: &Path) -> Vec<(u64, f64, f64)> {
     nodes
 }
 
-/// MOCT_LINK.shp에서 링크별 LINK_ID, F_NODE, T_NODE, LENGTH를 추출한다.
-pub fn read_links(folder: &Path) -> Vec<(u64, u64, u64, f64)> {
+/// MOCT_LINK.shp에서 링크별 LINK_ID, F_NODE, T_NODE, LENGTH와 TM 좌표 목록 (x, y)를 추출한다.
+pub fn read_links(folder: &Path) -> Vec<LinkInput> {
     let mut reader = shapefile::Reader::from_path(folder.join("MOCT_LINK.shp")).unwrap();
     let mut links = Vec::new();
     for result in reader.iter_shapes_and_records() {
-        let (_, record) = result.unwrap();
-        let link: u64 = text_field(&record, "LINK_ID").unwrap().parse().unwrap();
-        let f: u64 = text_field(&record, "F_NODE").unwrap().parse().unwrap();
-        let t: u64 = text_field(&record, "T_NODE").unwrap().parse().unwrap();
+        let (shape, record) = result.unwrap();
+        let Shape::Polyline(line) = shape else { panic!("링크가 Polyline 타입이 아님") };
+        let id: u64 = text_field(&record, "LINK_ID").unwrap().parse().unwrap();
+        let from: u64 = text_field(&record, "F_NODE").unwrap().parse().unwrap();
+        let to: u64 = text_field(&record, "T_NODE").unwrap().parse().unwrap();
         let length = numeric_field(&record, "LENGTH").unwrap();
-        links.push((link, f, t, length));
+        let geometry = line.parts().iter().flatten().map(|p| (p.x, p.y)).collect();
+        links.push(LinkInput { id, from, to, length, geometry });
     }
     links
 }

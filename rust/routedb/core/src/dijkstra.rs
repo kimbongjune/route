@@ -28,7 +28,7 @@ pub fn shortest_path(first_out: &[u32], head: &[u32], length: &[f64], from: u32,
     let n = first_out.len() - 1;
     // 교차로마다 지금까지 찾은 최단 거리
     let mut dist = vec![f64::INFINITY; n];
-    // 교차로마다 그 거리로 들어온 간선 번호
+    // 교차로마다 최단 거리로 진입한 간선 번호
     let mut came_by = vec![usize::MAX; n];
     let mut heap = BinaryHeap::new();
     let mut settled = 0;
@@ -40,7 +40,7 @@ pub fn shortest_path(first_out: &[u32], head: &[u32], length: &[f64], from: u32,
         if v == to {
             break;
         }
-        // 이미 더 짧은 거리로 처리한 교차로면 건너뛴다
+        // 이미 더 짧은 거리로 처리한 교차로는 건너뛴다
         if d > dist[v as usize] {
             continue;
         }
@@ -60,7 +60,7 @@ pub fn shortest_path(first_out: &[u32], head: &[u32], length: &[f64], from: u32,
         return None;
     }
 
-    // 도착 교차로에서 들어온 간선을 거꾸로 따라가 경로를 생성한다
+    // 도착 교차로부터 진입 간선을 역방향으로 추적하여 경로를 생성한다
     let mut edges = Vec::new();
     let mut v = to;
     while v != from {
@@ -80,7 +80,7 @@ fn tail_of(first_out: &[u32], e: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::Graph;
+    use crate::graph::{Graph, LinkInput};
 
     fn demo() -> Graph {
         let nodes = [
@@ -91,13 +91,13 @@ mod tests {
             (1000000501, 37.002, 127.001),
         ];
         let links = [
-            (1000001000, 1000000101, 1000000201, 100.0), // 가 -> 나
-            (1000001100, 1000000201, 1000000101, 100.0), // 나 -> 가
-            (1000002000, 1000000201, 1000000301, 100.0), // 나 -> 다
-            (1000002100, 1000000301, 1000000201, 100.0), // 다 -> 나
-            (1000003000, 1000000101, 1000000401, 50.0),  // 가 -> 라
-            (1000004000, 1000000401, 1000000301, 80.0),  // 라 -> 다
-            (1000005000, 1000000301, 1000000501, 100.0), // 다 -> 마
+            LinkInput::new(1000001000, 1000000101, 1000000201, 100.0), // 가 -> 나
+            LinkInput::new(1000001100, 1000000201, 1000000101, 100.0), // 나 -> 가
+            LinkInput::new(1000002000, 1000000201, 1000000301, 100.0), // 나 -> 다
+            LinkInput::new(1000002100, 1000000301, 1000000201, 100.0), // 다 -> 나
+            LinkInput::new(1000003000, 1000000101, 1000000401, 50.0),  // 가 -> 라
+            LinkInput::new(1000004000, 1000000401, 1000000301, 80.0),  // 라 -> 다
+            LinkInput::new(1000005000, 1000000301, 1000000501, 100.0), // 다 -> 마
         ];
         Graph::build(&nodes, &links).0
     }
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn unreachable() {
-        // 마에서 나가는 길이 없어서 가로 갈 수 없다
+        // 마에서 출발하는 간선 없음
         let g = demo();
         assert!(shortest_path(&g.first_out, &g.head, &g.length, 4, 0).is_none());
     }

@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use routedb_core::file::GraphFile;
-use routedb_core::graph::Graph;
+use routedb_core::graph::{Graph, LinkInput};
 use routedb_core::{dijkstra, hilbert};
 
 use coord::TmToWgs84;
@@ -30,8 +30,17 @@ fn main() {
         })
         .collect();
 
+    // 링크 좌표를 TM에서 위경도로 변환
+    let links: Vec<LinkInput> = links
+        .into_iter()
+        .map(|mut l| {
+            l.geometry = l.geometry.iter().map(|&(x, y)| tm.convert(x, y)).collect();
+            l
+        })
+        .collect();
+
     let (graph, skipped) = Graph::build(&ordered, &links);
-    println!("노드 {} 간선 {} 건너뛴 링크 {}", graph.node_count(), graph.edge_count(), skipped);
+    println!("노드 {} 간선 {} 링크 좌표 {} 건너뛴 링크 {}", graph.node_count(), graph.edge_count(), graph.geom_count(), skipped);
 
     // 그래프 파일 저장
     let output = Path::new(GRAPH_FILE_LOCATION);
