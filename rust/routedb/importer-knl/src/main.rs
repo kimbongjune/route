@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use routedb_core::file::GraphFile;
 use routedb_core::graph::{Graph, LinkInput};
+use routedb_core::snap::LinkIndex;
 use routedb_core::{dijkstra, hilbert};
 
 use coord::TmToWgs84;
@@ -59,6 +60,15 @@ fn main() {
     // 교차로 2290046502 능안교(동측) 위경도
     let v = file.node_id().iter().position(|&id| id == 2290046502).unwrap();
     println!("교차로 2290046502 위도 {:.8} 경도 {:.8}", file.lat()[v], file.lon()[v]);
+
+    // 링크 선분 R-tree 생성과 서울역 좌표 스냅
+    let started = Instant::now();
+    let index = LinkIndex::build(file.geom_first(), file.geom_lat(), file.geom_lon());
+    println!("R-tree 선분 {} ({:.0}ms)", index.len(), started.elapsed().as_secs_f64() * 1000.0);
+    let started = Instant::now();
+    let snap = index.nearest(37.5547, 126.9707).unwrap();
+    println!("서울역 37.5547, 126.9707 -> 링크 {} 거리 {:.1}m 위치 {:.6}, {:.6} ({:.2}ms)",
+             file.link_id()[snap.edge as usize], snap.distance_m, snap.lat, snap.lon, started.elapsed().as_secs_f64() * 1000.0);
 
     // 서울역 -> 강남역사거리, 서울역 -> 부산역(부산1호선)
     for (name, from_id, to_id) in [("서울역 -> 강남역사거리", 1010009300, 1210034101), ("서울역 -> 부산역", 1010009300, 1320000204)] {
