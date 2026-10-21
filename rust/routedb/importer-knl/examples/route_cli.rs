@@ -1,4 +1,4 @@
-// 출발 위경도와 도착 위경도를 받아 CCH 번들로 경로와 거리를 출력한다.
+// 출발 위경도와 도착 위경도를 받아 line graph CCH 번들로 경로와 거리를 출력한다.
 // cargo run --release -p importer-knl --example route_cli -- 37.5547 126.9707 37.4979 127.0276
 use std::path::Path;
 use std::time::Instant;
@@ -12,11 +12,6 @@ use routedb_core::snap::{LinkIndex, Snap};
 const GRAPH_FILE_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.rdb";
 const CCH_STRUCT_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-struct";
 const CCH_METRIC_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-metric";
-
-/// 간선 e의 출발 교차로 번호를 first_out에서 탐색한다.
-fn tail_of(first_out: &[u32], e: usize) -> u32 {
-    (first_out.partition_point(|&f| f as usize <= e) - 1) as u32
-}
 
 /// 간선 e의 평면 좌표상 길이(m)를 좌표 목록으로 계산한다.
 fn planar_length(file: &GraphFile, e: usize) -> f64 {
@@ -54,32 +49,36 @@ fn main() {
     println!("그래프와 CCH 번들 열기, R-tree 생성 {:.1}초", started.elapsed().as_secs_f64());
 
     let started = Instant::now();
-    let (first_out, head, length, link_id) = (file.first_out(), file.head(), file.length(), file.link_id());
-    // 가까운 간선 5개씩을 후보로 두고 거리 합이 작은 순서로 경로가 있는 조합을 찾는다
+    let (turn_first_out, turn_head, turn_weight, length, link_id) = (file.turn_first_out(), file.turn_head(), file.turn_weight(), file.length(), file.link_id());
+    // 가까운 간선 5개씩을 후보로 두고 25개 조합 중 출발·도착 스냅 거리와 경로 거리의 합이 가장 작은 조합을 고른다
     let froms = index.nearest_n(from_lat, from_lon, 5);
     let tos = index.nearest_n(to_lat, to_lon, 5);
-    let mut pairs: Vec<(&Snap, &Snap)> = froms.iter().flat_map(|f| tos.iter().map(move |t| (f, t))).collect();
-    pairs.sort_by(|a, b| (a.0.distance_m + a.1.distance_m).total_cmp(&(b.0.distance_m + b.1.distance_m)));
-
-    let mut result = None;
-    for (from, to) in pairs {
-        // 출발은 스냅된 간선의 도착 교차로에서 시작하고 도착은 스냅된 간선의 출발 교차로에서 끝낸다
-        let (from_frac, to_frac) = (fraction(&file, from), fraction(&file, to));
-        if from.edge == to.edge && from_frac <= to_frac {
-            result = Some((from, to, length[from.edge as usize] * (to_frac - from_frac), vec![link_id[from.edge as usize]]));
-            break;
-        }
-        let start = head[from.edge as usize];
-        let end = tail_of(first_out, to.edge as usize);
-        if let Some(nodes) = query.path(&metric_v, start, end) {
-            let edges = edges_of_node_path(first_out, head, length, &nodes);
-            let dist: f64 = edges.iter().map(|&e| length[e]).sum();
-            let total = length[from.edge as usize] * (1.0 - from_frac) + dist + length[to.edge as usize] * to_frac;
-            let mut links = vec![link_id[from.edge as usize]];
-            links.extend(edges.iter().map(|&e| link_id[e]));
-            links.push(link_id[to.edge as usize]);
-            result = Some((from, to, total, links));
-            break;
+    let mut result: Option<(&Snap, &Snap, f64, Vec<u64>)> = None;
+    for from in &froms {
+        for to in &tos {
+            // 출발 링크에서 도착 링크까지 line graph 경로를 구하고, 통행마다 경유 내부 링크를 펼쳐 링크 열을 만든다
+            let (from_frac, to_frac) = (fraction(&file, from), fraction(&file, to));
+            let found = if from.edge == to.edge && from_frac <= to_frac {
+                Some((length[from.edge as usize] * (to_frac - from_frac), vec![link_id[from.edge as usize]]))
+            } else {
+                query.path(&metric_v, from.edge, to.edge).map(|links| {
+                    let turns = edges_of_node_path(turn_first_out, turn_head, turn_weight, &links);
+                    let mut edges = vec![from.edge];
+                    for &t in &turns {
+                        edges.extend_from_slice(file.via_of(t));
+                        edges.push(turn_head[t]);
+                    }
+                    let between: f64 = edges[1..edges.len() - 1].iter().map(|&e| length[e as usize]).sum();
+                    let total = length[from.edge as usize] * (1.0 - from_frac) + between + length[to.edge as usize] * to_frac;
+                    (total, edges.iter().map(|&e| link_id[e as usize]).collect())
+                })
+            };
+            if let Some((total, links)) = found {
+                let cost = from.distance_m + total + to.distance_m;
+                if result.as_ref().is_none_or(|r| cost < r.0.distance_m + r.2 + r.1.distance_m) {
+                    result = Some((from, to, total, links));
+                }
+            }
         }
     }
     let Some((from, to, total, links)) = result else {

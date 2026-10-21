@@ -6,16 +6,18 @@ use std::path::Path;
 use memmap2::Mmap;
 
 use crate::graph::Graph;
+use crate::linegraph::LineGraph;
 
 /// 그래프 파일 맨 앞 8바이트
 pub const MAGIC: &[u8; 8] = b"ROUTEDB\0";
-pub const VERSION: u32 = 2;
-/// MAGIC 8 + VERSION 4 + 빈칸 4 + 교차로 수 8 + 간선 수 8 + 링크 좌표 수 8
-pub const HEADER_LEN: usize = 40;
+pub const VERSION: u32 = 3;
+/// MAGIC 8 + VERSION 4 + 빈칸 4 + 교차로 수 8 + 간선 수 8 + 링크 좌표 수 8 + 통행 수 8 + 경유 링크 수 8
+pub const HEADER_LEN: usize = 56;
 
 impl Graph {
-    /// 그래프를 헤더, 8바이트 배열(node_id, link_id, length, lat, lon, geom_lat, geom_lon), 4바이트 배열(first_out, head, geom_first) 순서로 파일에 저장한다.
-    pub fn write(&self, path: &Path) -> Result<()> {
+    /// 그래프와 line graph를 헤더, 8바이트 배열(node_id, link_id, length, lat, lon, geom_lat, geom_lon, turn_weight),
+    /// 4바이트 배열(first_out, head, geom_first, turn_first_out, turn_head, via_first, via) 순서로 파일에 저장한다.
+    pub fn write(&self, line: &LineGraph, path: &Path) -> Result<()> {
         let mut w = BufWriter::new(File::create(path)?);
 
         // 헤더
@@ -25,6 +27,8 @@ impl Graph {
         w.write_all(&(self.node_count() as u64).to_le_bytes())?;
         w.write_all(&(self.edge_count() as u64).to_le_bytes())?;
         w.write_all(&(self.geom_count() as u64).to_le_bytes())?;
+        w.write_all(&(line.edge_count() as u64).to_le_bytes())?;
+        w.write_all(&(line.via.len() as u64).to_le_bytes())?;
 
         // 8바이트 배열
         w.write_all(bytemuck::cast_slice(&self.node_id))?;
@@ -34,11 +38,16 @@ impl Graph {
         w.write_all(bytemuck::cast_slice(&self.lon))?;
         w.write_all(bytemuck::cast_slice(&self.geom_lat))?;
         w.write_all(bytemuck::cast_slice(&self.geom_lon))?;
+        w.write_all(bytemuck::cast_slice(&line.weight))?;
 
         // 4바이트 배열
         w.write_all(bytemuck::cast_slice(&self.first_out))?;
         w.write_all(bytemuck::cast_slice(&self.head))?;
         w.write_all(bytemuck::cast_slice(&self.geom_first))?;
+        w.write_all(bytemuck::cast_slice(&line.first_out))?;
+        w.write_all(bytemuck::cast_slice(&line.head))?;
+        w.write_all(bytemuck::cast_slice(&line.via_first))?;
+        w.write_all(bytemuck::cast_slice(&line.via))?;
 
         w.flush()
     }
@@ -50,8 +59,10 @@ pub struct GraphFile {
     node_count: usize,
     edge_count: usize,
     geom_count: usize,
+    turn_count: usize,
+    via_count: usize,
     /// 배열별 파일 내 위치
-    ranges: [Range<usize>; 10],
+    ranges: [Range<usize>; 15],
 }
 
 impl GraphFile {
@@ -67,9 +78,12 @@ impl GraphFile {
         if version != VERSION {
             return Err(Error::new(ErrorKind::InvalidData, format!("지원하지 않는 버전 {version}")));
         }
-        let node_count = u64::from_le_bytes(mmap[16..24].try_into().unwrap()) as usize;
-        let edge_count = u64::from_le_bytes(mmap[24..32].try_into().unwrap()) as usize;
-        let geom_count = u64::from_le_bytes(mmap[32..40].try_into().unwrap()) as usize;
+        let count = |at: usize| u64::from_le_bytes(mmap[at..at + 8].try_into().unwrap()) as usize;
+        let node_count = count(16);
+        let edge_count = count(24);
+        let geom_count = count(32);
+        let turn_count = count(40);
+        let via_count = count(48);
 
         // 배열별 파일 내 위치 계산
         let sizes = [
@@ -80,9 +94,14 @@ impl GraphFile {
             8 * node_count,       // lon
             8 * geom_count,       // geom_lat
             8 * geom_count,       // geom_lon
+            8 * turn_count,       // turn_weight
             4 * (node_count + 1), // first_out
             4 * edge_count,       // head
             4 * (edge_count + 1), // geom_first
+            4 * (edge_count + 1), // turn_first_out
+            4 * turn_count,       // turn_head
+            4 * (turn_count + 1), // via_first
+            4 * via_count,        // via
         ];
         let mut start = HEADER_LEN;
         let ranges = sizes.map(|size| {
@@ -93,7 +112,7 @@ impl GraphFile {
         if start != mmap.len() {
             return Err(Error::new(ErrorKind::InvalidData, format!("파일 크기가 {}바이트여야 하는데 {}바이트", start, mmap.len())));
         }
-        Ok(Self { mmap, node_count, edge_count, geom_count, ranges })
+        Ok(Self { mmap, node_count, edge_count, geom_count, turn_count, via_count, ranges })
     }
 
     pub fn node_count(&self) -> usize {
@@ -106,6 +125,14 @@ impl GraphFile {
 
     pub fn geom_count(&self) -> usize {
         self.geom_count
+    }
+
+    pub fn turn_count(&self) -> usize {
+        self.turn_count
+    }
+
+    pub fn via_count(&self) -> usize {
+        self.via_count
     }
 
     pub fn node_id(&self) -> &[u64] {
@@ -136,16 +163,46 @@ impl GraphFile {
         bytemuck::cast_slice(&self.mmap[self.ranges[6].clone()])
     }
 
-    pub fn first_out(&self) -> &[u32] {
+    /// 통행마다 비용(m)
+    pub fn turn_weight(&self) -> &[f64] {
         bytemuck::cast_slice(&self.mmap[self.ranges[7].clone()])
     }
 
-    pub fn head(&self) -> &[u32] {
+    pub fn first_out(&self) -> &[u32] {
         bytemuck::cast_slice(&self.mmap[self.ranges[8].clone()])
     }
 
-    pub fn geom_first(&self) -> &[u32] {
+    pub fn head(&self) -> &[u32] {
         bytemuck::cast_slice(&self.mmap[self.ranges[9].clone()])
+    }
+
+    pub fn geom_first(&self) -> &[u32] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[10].clone()])
+    }
+
+    /// 링크마다 이어지는 첫 통행 번호
+    pub fn turn_first_out(&self) -> &[u32] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[11].clone()])
+    }
+
+    /// 통행마다 다음 링크 번호
+    pub fn turn_head(&self) -> &[u32] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[12].clone()])
+    }
+
+    /// 통행마다 경유 내부 링크가 시작하는 번호
+    pub fn via_first(&self) -> &[u32] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[13].clone()])
+    }
+
+    /// 경유 내부 링크 번호
+    pub fn via(&self) -> &[u32] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[14].clone()])
+    }
+
+    /// 통행 t가 경유하는 내부 링크 번호
+    pub fn via_of(&self, t: usize) -> &[u32] {
+        &self.via()[self.via_first()[t] as usize..self.via_first()[t + 1] as usize]
     }
 }
 
@@ -175,11 +232,23 @@ mod tests {
         Graph::build(&nodes, &links).0
     }
 
+    /// 간선 7개에 통행 3개. 0→3, 1→6은 경유 없음, 6→5는 간선 4를 경유
+    fn demo_line() -> LineGraph {
+        LineGraph {
+            first_out: vec![0, 1, 2, 2, 2, 2, 2, 3],
+            head: vec![3, 6, 5],
+            weight: vec![100.0, 80.0, 200.0],
+            via_first: vec![0, 0, 0, 1],
+            via: vec![4],
+        }
+    }
+
     #[test]
     fn write_and_open_same_graph() {
         let g = demo();
+        let line = demo_line();
         let path = std::env::temp_dir().join(format!("routedb_test_{}.rdb", std::process::id()));
-        g.write(&path).unwrap();
+        g.write(&line, &path).unwrap();
 
         let f = GraphFile::open(&path).unwrap();
         assert_eq!(f.node_count(), g.node_count());
@@ -195,6 +264,14 @@ mod tests {
         assert_eq!(f.geom_first(), g.geom_first.as_slice());
         assert_eq!(f.geom_lat(), g.geom_lat.as_slice());
         assert_eq!(f.geom_lon(), g.geom_lon.as_slice());
+        assert_eq!(f.turn_count(), 3);
+        assert_eq!(f.via_count(), 1);
+        assert_eq!(f.turn_first_out(), line.first_out.as_slice());
+        assert_eq!(f.turn_head(), line.head.as_slice());
+        assert_eq!(f.turn_weight(), line.weight.as_slice());
+        assert_eq!(f.via_first(), line.via_first.as_slice());
+        assert_eq!(f.via(), line.via.as_slice());
+        assert_eq!(f.via_of(2), [4]);
 
         drop(f);
         std::fs::remove_file(&path).unwrap();

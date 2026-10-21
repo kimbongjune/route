@@ -2,6 +2,7 @@
 #[path = "../src/coord.rs"]
 mod coord;
 #[path = "../src/moct.rs"]
+#[allow(dead_code)]
 mod moct;
 
 use std::collections::HashMap;
