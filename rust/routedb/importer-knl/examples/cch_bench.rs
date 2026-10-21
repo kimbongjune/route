@@ -7,7 +7,7 @@ use cch::path::PathQuery;
 use cch::{degree_order, distance, inertial_order, node_path, Cch, INF_WEIGHT};
 use routedb_core::dijkstra;
 use routedb_core::file::GraphFile;
-use routedb_core::hierarchy::{cch_graph, tails};
+use routedb_core::hierarchy::{cch_graph, edges_of_node_path, tails};
 
 const GRAPH_FILE_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.rdb";
 const PAIRS: usize = 300;
@@ -49,8 +49,10 @@ fn main() {
         let started = Instant::now();
         let path = node_path(&cch_v, &metric_v, from, to).unwrap();
         let t_path = started.elapsed().as_secs_f64() * 1000.0;
-        let (dd, _, _) = dijkstra::shortest_path(first_out, head, &length_cm, from, to).unwrap();
-        println!("{} CCH {:.2}m 거리 {:.2}ms 경로 {:.2}ms 교차로 {}개 | 다익스트라 {:.2}m", name, d as f64 / 100.0, t_dist, t_path, path.len(), dd / 100.0);
+        let (dd, dij_edges, _) = dijkstra::shortest_path(first_out, head, &length_cm, from, to).unwrap();
+        let edges = edges_of_node_path(first_out, head, &length_cm, &path);
+        println!("{} CCH {:.2}m 거리 {:.2}ms 경로 {:.2}ms 간선 {}개 | 다익스트라 {:.2}m | 간선 열 같음 {}",
+                 name, d as f64 / 100.0, t_dist, t_path, edges.len(), dd / 100.0, edges == dij_edges);
     }
 
     // 고정 시드 LCG로 무작위 쌍을 만들어 다익스트라와 대조

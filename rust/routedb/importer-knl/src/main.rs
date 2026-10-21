@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use routedb_core::file::GraphFile;
 use routedb_core::graph::{Graph, LinkInput};
+use routedb_core::hierarchy;
 use routedb_core::snap::LinkIndex;
 use routedb_core::{dijkstra, hilbert};
 
@@ -13,6 +14,8 @@ use coord::TmToWgs84;
 use moct::MOCT_SHPFILE_FOLDER_LOCATION;
 
 const GRAPH_FILE_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.rdb";
+const CCH_STRUCT_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-struct";
+const CCH_METRIC_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-metric";
 
 fn main() {
     let folder = Path::new(MOCT_SHPFILE_FOLDER_LOCATION);
@@ -60,6 +63,15 @@ fn main() {
     // 교차로 2290046502 능안교(동측) 위경도
     let v = file.node_id().iter().position(|&id| id == 2290046502).unwrap();
     println!("교차로 2290046502 위도 {:.8} 경도 {:.8}", file.lat()[v], file.lon()[v]);
+
+    // CCH 생성과 번들 저장
+    let started = Instant::now();
+    let (cch, metric) = hierarchy::build(file.first_out(), file.head(), file.length(), file.lat(), file.lon());
+    println!("CCH 간선 {} ({:.1}초)", cch.cch_arc_count(), started.elapsed().as_secs_f64());
+    cch.save_struct(Path::new(CCH_STRUCT_LOCATION)).unwrap();
+    metric.save(Path::new(CCH_METRIC_LOCATION)).unwrap();
+    println!("저장 {} {}바이트, {} {}바이트", CCH_STRUCT_LOCATION, std::fs::metadata(CCH_STRUCT_LOCATION).unwrap().len(),
+             CCH_METRIC_LOCATION, std::fs::metadata(CCH_METRIC_LOCATION).unwrap().len());
 
     // 링크 선분 R-tree 생성과 서울역 좌표 스냅
     let started = Instant::now();

@@ -19,6 +19,30 @@ pub fn tails(first_out: &[u32]) -> Vec<u32> {
     tail
 }
 
+/// inertial_order로 순서를 계산하고 CCH 구조와 길이 가중치 metric을 만든다.
+pub fn build(first_out: &[u32], head: &[u32], length: &[f64], lat: &[f64], lon: &[f64]) -> (cch::Cch, cch::Metric) {
+    let input = cch_graph(first_out, head, length);
+    let lat: Vec<f32> = lat.iter().map(|&v| v as f32).collect();
+    let lon: Vec<f32> = lon.iter().map(|&v| v as f32).collect();
+    let order = cch::inertial_order(input.node_count() as u32, &tails(first_out), head, &lat, &lon);
+    let cch = cch::Cch::build(&input, &order);
+    let metric = cch.customize(&input.weight);
+    (cch, metric)
+}
+
+/// CCH가 반환한 교차로 번호 열을 간선 번호 열로 변환한다. 같은 두 교차로 사이에 간선이 여러 개면 가장 짧은 간선을 고른다.
+pub fn edges_of_node_path(first_out: &[u32], head: &[u32], length: &[f64], nodes: &[u32]) -> Vec<usize> {
+    nodes
+        .windows(2)
+        .map(|w| {
+            (first_out[w[0] as usize] as usize..first_out[w[0] as usize + 1] as usize)
+                .filter(|&e| head[e] == w[1])
+                .min_by(|&a, &b| length[a].total_cmp(&length[b]))
+                .expect("교차로 열이 간선으로 이어지지 않음")
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,12 +89,16 @@ mod tests {
         assert_eq!(distance(&cch_v, &metric_v, 2, 3), 25_000);
         assert_eq!(node_path(&cch_v, &metric_v, 2, 3), Some(vec![2, 1, 0, 3]));
 
-        // 모든 쌍을 다익스트라와 대조
+        // 모든 쌍의 거리와 간선 열을 다익스트라와 대조
         for s in 0..5u32 {
             for t in 0..5u32 {
-                let expected = dijkstra::shortest_path(&g.first_out, &g.head, &g.length, s, t).map(|r| (r.0 * 100.0).round() as u32);
+                let expected = dijkstra::shortest_path(&g.first_out, &g.head, &g.length, s, t);
                 let got = distance(&cch_v, &metric_v, s, t);
-                assert_eq!(expected.unwrap_or(INF_WEIGHT), got, "{s} -> {t}");
+                assert_eq!(expected.as_ref().map_or(INF_WEIGHT, |r| (r.0 * 100.0).round() as u32), got, "{s} -> {t}");
+                if let Some((_, edges, _)) = expected {
+                    let nodes = node_path(&cch_v, &metric_v, s, t).unwrap();
+                    assert_eq!(edges_of_node_path(&g.first_out, &g.head, &g.length, &nodes), edges, "{s} -> {t}");
+                }
             }
         }
     }

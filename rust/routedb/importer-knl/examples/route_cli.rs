@@ -1,13 +1,17 @@
-// 출발 위경도와 도착 위경도를 받아 경로와 거리를 출력한다.
+// 출발 위경도와 도착 위경도를 받아 CCH 번들로 경로와 거리를 출력한다.
 // cargo run --release -p importer-knl --example route_cli -- 37.5547 126.9707 37.4979 127.0276
 use std::path::Path;
 use std::time::Instant;
 
-use routedb_core::astar;
+use cch::bundle::{CchBundle, MetricBundle};
+use cch::path::PathQuery;
 use routedb_core::file::GraphFile;
+use routedb_core::hierarchy::edges_of_node_path;
 use routedb_core::snap::{LinkIndex, Snap};
 
 const GRAPH_FILE_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.rdb";
+const CCH_STRUCT_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-struct";
+const CCH_METRIC_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-metric";
 
 /// 간선 e의 출발 교차로 번호를 first_out에서 탐색한다.
 fn tail_of(first_out: &[u32], e: usize) -> u32 {
@@ -43,7 +47,11 @@ fn main() {
     let started = Instant::now();
     let file = GraphFile::open(Path::new(GRAPH_FILE_LOCATION)).unwrap();
     let index = LinkIndex::build(file.geom_first(), file.geom_lat(), file.geom_lon());
-    println!("그래프 열기와 R-tree 생성 {:.1}초", started.elapsed().as_secs_f64());
+    let cch = CchBundle::open(Path::new(CCH_STRUCT_LOCATION)).unwrap();
+    let metric = MetricBundle::open(Path::new(CCH_METRIC_LOCATION)).unwrap();
+    let (cch_v, metric_v) = (cch.view(), metric.view());
+    let mut query = PathQuery::new(&cch_v);
+    println!("그래프와 CCH 번들 열기, R-tree 생성 {:.1}초", started.elapsed().as_secs_f64());
 
     let started = Instant::now();
     let (first_out, head, length, link_id) = (file.first_out(), file.head(), file.length(), file.link_id());
@@ -63,7 +71,9 @@ fn main() {
         }
         let start = head[from.edge as usize];
         let end = tail_of(first_out, to.edge as usize);
-        if let Some((dist, edges, _)) = astar::shortest_path(first_out, head, length, file.lat(), file.lon(), start, end) {
+        if let Some(nodes) = query.path(&metric_v, start, end) {
+            let edges = edges_of_node_path(first_out, head, length, &nodes);
+            let dist: f64 = edges.iter().map(|&e| length[e]).sum();
             let total = length[from.edge as usize] * (1.0 - from_frac) + dist + length[to.edge as usize] * to_frac;
             let mut links = vec![link_id[from.edge as usize]];
             links.extend(edges.iter().map(|&e| link_id[e]));
