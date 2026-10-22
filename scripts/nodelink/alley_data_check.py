@@ -61,15 +61,22 @@ def pair_direction(a, b, max_dist, min_len=20):
     return j[j.cos.abs() > 0.8]
 
 
-def bumps_on_moct_roads(links):
+def address_roads():
+    """도로명주소 전자지도 도로구간(TM)"""
     roads = pd.concat([gpd.read_file(f, encoding="cp949", columns=["RN", "ROA_CLS_SE", "ROAD_BT"]) for f in ADDRESS_ROADS], ignore_index=True)
-    roads = gpd.GeoDataFrame(roads, geometry="geometry", crs="EPSG:5179").to_crs(TM)
+    return gpd.GeoDataFrame(roads, geometry="geometry", crs="EPSG:5179").to_crs(TM)
+
+
+def guide_bumps():
+    """방지턱 안내 지점(안내제외 N)"""
     bump = pd.read_csv(ROOT / "maps" / "과속방지턱정보" / "행안부" / "과속방지턱_지점.csv", dtype=str)
     bump = bump[bump.안내제외 == "N"].reset_index(drop=True)
     bump["위도"], bump["경도"] = bump.위도.astype(float), bump.경도.astype(float)
-    g = points(bump, "위도", "경도")
-    jl = gpd.sjoin_nearest(g, links[["geometry"]], distance_col="dl")
-    dl = jl[~jl.index.duplicated()].dl
+    return bump
+
+
+def on_moct_road(g, links, roads):
+    """점마다 30m 안 가장 가까운 전자지도 도로와, 그 도로 길이의 절반 이상이 표준노드링크 링크 15m 안에 있는지(in_moct)"""
     jr = gpd.sjoin_nearest(g, roads, distance_col="dr", max_distance=30)
     jr = jr[~jr.index.duplicated()]
     seg = roads.loc[jr.index_right.unique()]
@@ -79,6 +86,16 @@ def bumps_on_moct_roads(links):
         u = shapely.union_all(links.geometry.loc[grp.index_right].buffer(15).values)
         cover[i] = roads.geometry.loc[i].intersection(u).length / roads.geometry.loc[i].length
     jr["in_moct"] = jr.index_right.map(lambda i: cover.get(i, 0.0)) >= 0.5
+    return jr
+
+
+def bumps_on_moct_roads(links):
+    roads = address_roads()
+    bump = guide_bumps()
+    g = points(bump, "위도", "경도")
+    jl = gpd.sjoin_nearest(g, links[["geometry"]], distance_col="dl")
+    dl = jl[~jl.index.duplicated()].dl
+    jr = on_moct_road(g, links, roads)
     jr["dl"] = dl.loc[jr.index]
     cls = {"1": "고속도로", "2": "대로", "3": "로", "4": "길"}
     print(f"== 방지턱 안내 지점 {len(g):,} | 전자지도 도로구간 {len(roads):,}개 중 30m 안 도로가 있는 지점 {len(jr):,}")
