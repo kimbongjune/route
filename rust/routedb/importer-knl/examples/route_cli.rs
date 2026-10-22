@@ -89,4 +89,15 @@ fn main() {
              link_id[from.edge as usize], from.distance_m, link_id[to.edge as usize], to.distance_m);
     println!("거리 {:.0}m 링크 {}개 ({:.0}ms)", total, links.len(), started.elapsed().as_secs_f64() * 1000.0);
     println!("{}", links.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(" "));
+    // 경로가 지나는 요금 지점의 영업소코드를 지나는 순서로 출력한다
+    let edge_of: std::collections::HashMap<u64, usize> = link_id.iter().enumerate().map(|(e, &id)| (id, e)).collect();
+    // 바로 앞 링크에도 있던 영업소는 같은 요금소이므로 다시 넣지 않는다
+    let mut units: Vec<u32> = Vec::new();
+    let mut prev: &[u32] = &[];
+    for id in &links {
+        let cur = file.tolls_of(edge_of[id]);
+        units.extend(cur.iter().filter(|u| !prev.contains(u)));
+        prev = cur;
+    }
+    println!("영업소 {}", units.iter().map(|u| format!("{u:03}")).collect::<Vec<_>>().join(" "));
 }

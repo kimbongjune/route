@@ -10,13 +10,13 @@ use crate::linegraph::LineGraph;
 
 /// 그래프 파일 맨 앞 8바이트
 pub const MAGIC: &[u8; 8] = b"ROUTEDB\0";
-pub const VERSION: u32 = 3;
-/// MAGIC 8 + VERSION 4 + 빈칸 4 + 교차로 수 8 + 간선 수 8 + 링크 좌표 수 8 + 통행 수 8 + 경유 링크 수 8
-pub const HEADER_LEN: usize = 56;
+pub const VERSION: u32 = 4;
+/// MAGIC 8 + VERSION 4 + 빈칸 4 + 교차로 수 8 + 간선 수 8 + 링크 좌표 수 8 + 통행 수 8 + 경유 링크 수 8 + 영업소코드 수 8
+pub const HEADER_LEN: usize = 64;
 
 impl Graph {
     /// 그래프와 line graph를 헤더, 8바이트 배열(node_id, link_id, length, lat, lon, geom_lat, geom_lon, turn_weight),
-    /// 4바이트 배열(first_out, head, geom_first, turn_first_out, turn_head, via_first, via) 순서로 파일에 저장한다.
+    /// 4바이트 배열(first_out, head, geom_first, turn_first_out, turn_head, via_first, via, toll_first, toll_unit) 순서로 파일에 저장한다.
     pub fn write(&self, line: &LineGraph, path: &Path) -> Result<()> {
         let mut w = BufWriter::new(File::create(path)?);
 
@@ -29,6 +29,7 @@ impl Graph {
         w.write_all(&(self.geom_count() as u64).to_le_bytes())?;
         w.write_all(&(line.edge_count() as u64).to_le_bytes())?;
         w.write_all(&(line.via.len() as u64).to_le_bytes())?;
+        w.write_all(&(self.toll_unit.len() as u64).to_le_bytes())?;
 
         // 8바이트 배열
         w.write_all(bytemuck::cast_slice(&self.node_id))?;
@@ -48,6 +49,8 @@ impl Graph {
         w.write_all(bytemuck::cast_slice(&line.head))?;
         w.write_all(bytemuck::cast_slice(&line.via_first))?;
         w.write_all(bytemuck::cast_slice(&line.via))?;
+        w.write_all(bytemuck::cast_slice(&self.toll_first))?;
+        w.write_all(bytemuck::cast_slice(&self.toll_unit))?;
 
         w.flush()
     }
@@ -61,8 +64,9 @@ pub struct GraphFile {
     geom_count: usize,
     turn_count: usize,
     via_count: usize,
+    toll_count: usize,
     /// 배열별 파일 내 위치
-    ranges: [Range<usize>; 15],
+    ranges: [Range<usize>; 17],
 }
 
 impl GraphFile {
@@ -84,6 +88,7 @@ impl GraphFile {
         let geom_count = count(32);
         let turn_count = count(40);
         let via_count = count(48);
+        let toll_count = count(56);
 
         // 배열별 파일 내 위치 계산
         let sizes = [
@@ -102,6 +107,8 @@ impl GraphFile {
             4 * turn_count,       // turn_head
             4 * (turn_count + 1), // via_first
             4 * via_count,        // via
+            4 * (edge_count + 1), // toll_first
+            4 * toll_count,       // toll_unit
         ];
         let mut start = HEADER_LEN;
         let ranges = sizes.map(|size| {
@@ -112,7 +119,7 @@ impl GraphFile {
         if start != mmap.len() {
             return Err(Error::new(ErrorKind::InvalidData, format!("파일 크기가 {}바이트여야 하는데 {}바이트", start, mmap.len())));
         }
-        Ok(Self { mmap, node_count, edge_count, geom_count, turn_count, via_count, ranges })
+        Ok(Self { mmap, node_count, edge_count, geom_count, turn_count, via_count, toll_count, ranges })
     }
 
     pub fn node_count(&self) -> usize {
@@ -133,6 +140,10 @@ impl GraphFile {
 
     pub fn via_count(&self) -> usize {
         self.via_count
+    }
+
+    pub fn toll_count(&self) -> usize {
+        self.toll_count
     }
 
     pub fn node_id(&self) -> &[u64] {
@@ -204,6 +215,21 @@ impl GraphFile {
     pub fn via_of(&self, t: usize) -> &[u32] {
         &self.via()[self.via_first()[t] as usize..self.via_first()[t + 1] as usize]
     }
+
+    /// 간선마다 영업소코드가 시작하는 번호
+    pub fn toll_first(&self) -> &[u32] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[15].clone()])
+    }
+
+    /// 요금 지점 링크의 영업소코드
+    pub fn toll_unit(&self) -> &[u32] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[16].clone()])
+    }
+
+    /// 간선 e의 영업소코드
+    pub fn tolls_of(&self, e: usize) -> &[u32] {
+        &self.toll_unit()[self.toll_first()[e] as usize..self.toll_first()[e + 1] as usize]
+    }
 }
 
 #[cfg(test)]
@@ -245,7 +271,8 @@ mod tests {
 
     #[test]
     fn write_and_open_same_graph() {
-        let g = demo();
+        let mut g = demo();
+        g.set_tolls(&[(1000002000, 246), (1000002000, 29), (1000005000, 29)]);
         let line = demo_line();
         let path = std::env::temp_dir().join(format!("routedb_test_{}.rdb", std::process::id()));
         g.write(&line, &path).unwrap();
@@ -272,6 +299,11 @@ mod tests {
         assert_eq!(f.via_first(), line.via_first.as_slice());
         assert_eq!(f.via(), line.via.as_slice());
         assert_eq!(f.via_of(2), [4]);
+        assert_eq!(f.toll_count(), 3);
+        assert_eq!(f.toll_first(), g.toll_first.as_slice());
+        assert_eq!(f.toll_unit(), g.toll_unit.as_slice());
+        let e = g.link_id.iter().position(|&id| id == 1000002000).unwrap();
+        assert_eq!(f.tolls_of(e), [29, 246]);
 
         drop(f);
         std::fs::remove_file(&path).unwrap();

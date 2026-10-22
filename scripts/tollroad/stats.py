@@ -47,8 +47,11 @@ def main():
     no = links[links.LINK_ID == ""]
     print("요금지점_링크:", len(links), "행, 링크 있는 영업소", len(with_link), "링크 없는 영업소", sorted(set(no.영업소코드 + " " + no.영업소명)))
     print("  구간 처리 링크", links.영업소명[links.기준 == "구간"].value_counts(sort=False).to_dict())
-    extra = read_csv(TOLLROAD_DIR / "추가링크_휴게소.csv")
-    print("추가링크_휴게소", len(extra), extra.영업소명.value_counts(sort=False).to_dict())
+    rest = read_csv(TOLLROAD_DIR / "휴게소_연결링크.csv")
+    nodes = read_csv(TOLLROAD_DIR / "휴게소_연결노드.csv")
+    piece = rest.원본LINK_ID != ""
+    print("휴게소_연결링크", len(rest), "새 링크", (~piece).sum(), "조각", piece.sum(), "나눈 노드링크 링크", rest.원본LINK_ID[piece].nunique(),
+          "| 휴게소_연결노드", len(nodes), "| 영업소코드별 요금소 링크", rest.영업소코드[rest.영업소코드 != ""].value_counts(sort=False).to_dict())
 
 
 if __name__ == "__main__":

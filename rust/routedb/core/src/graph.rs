@@ -40,6 +40,10 @@ pub struct Graph {
     pub geom_lat: Vec<f64>,
     /// 링크 좌표 경도
     pub geom_lon: Vec<f64>,
+    /// 간선마다 영업소코드가 시작하는 번호. 간선 e의 영업소코드는 toll_first[e]번부터 toll_first[e + 1]번 전까지이다.
+    pub toll_first: Vec<u32>,
+    /// 요금 지점 링크의 영업소코드
+    pub toll_unit: Vec<u32>,
 }
 
 impl Graph {
@@ -94,6 +98,8 @@ impl Graph {
             geom_first,
             geom_lat,
             geom_lon,
+            toll_first: vec![0; edges.len() + 1],
+            toll_unit: Vec::new(),
         };
         (graph, skipped)
     }
@@ -108,6 +114,38 @@ impl Graph {
 
     pub fn geom_count(&self) -> usize {
         self.geom_lat.len()
+    }
+
+    /// (LINK_ID, 영업소코드) 목록으로 간선마다 영업소코드를 저장한다.
+    /// 같은 간선·같은 영업소코드는 한 번만 저장하고, 그래프에 없는 LINK_ID의 행 수를 반환한다.
+    pub fn set_tolls(&mut self, tolls: &[(u64, u32)]) -> usize {
+        let index: HashMap<u64, usize> = self.link_id.iter().enumerate().map(|(e, &id)| (id, e)).collect();
+        let mut per_edge: Vec<Vec<u32>> = vec![Vec::new(); self.edge_count()];
+        let mut missing = 0;
+        for &(id, unit) in tolls {
+            match index.get(&id) {
+                Some(&e) => {
+                    if !per_edge[e].contains(&unit) {
+                        per_edge[e].push(unit);
+                    }
+                }
+                None => missing += 1,
+            }
+        }
+        self.toll_first = Vec::with_capacity(self.edge_count() + 1);
+        self.toll_unit = Vec::new();
+        self.toll_first.push(0);
+        for units in &mut per_edge {
+            units.sort_unstable();
+            self.toll_unit.extend_from_slice(units);
+            self.toll_first.push(self.toll_unit.len() as u32);
+        }
+        missing
+    }
+
+    /// 간선 e의 영업소코드
+    pub fn tolls_of(&self, e: usize) -> &[u32] {
+        &self.toll_unit[self.toll_first[e] as usize..self.toll_first[e + 1] as usize]
     }
 
     /// 교차로 v에서 출발하는 간선 번호 범위
@@ -154,5 +192,20 @@ mod tests {
         assert_eq!(g.geom_first, vec![0, 0, 3, 3, 3, 3, 3, 3]);
         assert_eq!(g.geom_lat[1], 37.0005);
         assert_eq!(g.geom_lon[1], 126.9995);
+    }
+
+    #[test]
+    fn set_tolls_by_link_id() {
+        let nodes = [(1, 37.0, 127.0), (2, 37.0, 127.001), (3, 37.001, 127.001)];
+        let links = vec![LinkInput::new(10, 1, 2, 100.0), LinkInput::new(20, 2, 3, 100.0), LinkInput::new(30, 3, 1, 100.0)];
+        let (mut g, _) = Graph::build(&nodes, &links);
+        // 링크 10에 영업소 246과 29, 링크 20에 29. 같은 쌍 중복과 그래프에 없는 링크 99
+        let missing = g.set_tolls(&[(10, 246), (10, 29), (20, 29), (10, 246), (99, 1)]);
+        assert_eq!(missing, 1);
+        let e = |id: u64| g.link_id.iter().position(|&x| x == id).unwrap();
+        assert_eq!(g.tolls_of(e(10)), [29, 246]);
+        assert_eq!(g.tolls_of(e(20)), [29]);
+        assert_eq!(g.tolls_of(e(30)), [] as [u32; 0]);
+        assert_eq!(g.toll_first.len(), 4);
     }
 }
