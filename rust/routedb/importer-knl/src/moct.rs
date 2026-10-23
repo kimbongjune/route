@@ -67,7 +67,8 @@ pub fn read_turns(folder: &Path) -> Vec<Turn> {
     turns
 }
 
-/// MOCT_LINK.shp에서 링크별 LINK_ID, F_NODE, T_NODE, LENGTH와 TM 좌표 목록 (x, y)를 추출한다. ROAD_USE=1 미사용 링크는 제외한다.
+/// MOCT_LINK.shp에서 링크별 LINK_ID, F_NODE, T_NODE, LENGTH, TM 좌표 목록 (x, y), 통과제한 REST_VEH, REST_W, REST_H를 추출한다.
+/// ROAD_USE=1 미사용 링크는 제외한다.
 pub fn read_links(folder: &Path) -> Vec<LinkInput> {
     let mut reader = shapefile::Reader::from_path(folder.join("MOCT_LINK.shp")).unwrap();
     let mut links = Vec::new();
@@ -82,7 +83,10 @@ pub fn read_links(folder: &Path) -> Vec<LinkInput> {
         let to: u64 = text_field(&record, "T_NODE").unwrap().parse().unwrap();
         let length = numeric_field(&record, "LENGTH").unwrap();
         let geometry = line.parts().iter().flatten().map(|p| (p.x, p.y)).collect();
-        links.push(LinkInput { id, from, to, length, geometry });
+        let rest_veh: u8 = text_field(&record, "REST_VEH").unwrap().trim().parse().unwrap();
+        let rest_w = numeric_field(&record, "REST_W").unwrap() as u16;
+        let rest_h = numeric_field(&record, "REST_H").unwrap() as u16;
+        links.push(LinkInput { id, from, to, length, geometry, rest_veh, rest_w, rest_h });
     }
     links
 }

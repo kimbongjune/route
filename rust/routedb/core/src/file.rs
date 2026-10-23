@@ -10,13 +10,14 @@ use crate::linegraph::LineGraph;
 
 /// 그래프 파일 맨 앞 8바이트
 pub const MAGIC: &[u8; 8] = b"ROUTEDB\0";
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 /// MAGIC 8 + VERSION 4 + 빈칸 4 + 교차로 수 8 + 간선 수 8 + 링크 좌표 수 8 + 통행 수 8 + 경유 링크 수 8 + 영업소코드 수 8
 pub const HEADER_LEN: usize = 64;
 
 impl Graph {
     /// 그래프와 line graph를 헤더, 8바이트 배열(node_id, link_id, length, lat, lon, geom_lat, geom_lon, turn_weight),
-    /// 4바이트 배열(first_out, head, geom_first, turn_first_out, turn_head, via_first, via, toll_first, toll_unit) 순서로 파일에 저장한다.
+    /// 4바이트 배열(first_out, head, geom_first, turn_first_out, turn_head, via_first, via, toll_first, toll_unit),
+    /// 2바이트 배열(rest_w, rest_h), 1바이트 배열(rest_veh) 순서로 파일에 저장한다.
     pub fn write(&self, line: &LineGraph, path: &Path) -> Result<()> {
         let mut w = BufWriter::new(File::create(path)?);
 
@@ -52,6 +53,11 @@ impl Graph {
         w.write_all(bytemuck::cast_slice(&self.toll_first))?;
         w.write_all(bytemuck::cast_slice(&self.toll_unit))?;
 
+        // 2바이트 배열과 1바이트 배열
+        w.write_all(bytemuck::cast_slice(&self.rest_w))?;
+        w.write_all(bytemuck::cast_slice(&self.rest_h))?;
+        w.write_all(&self.rest_veh)?;
+
         w.flush()
     }
 }
@@ -66,7 +72,7 @@ pub struct GraphFile {
     via_count: usize,
     toll_count: usize,
     /// 배열별 파일 내 위치
-    ranges: [Range<usize>; 17],
+    ranges: [Range<usize>; 20],
 }
 
 impl GraphFile {
@@ -109,6 +115,9 @@ impl GraphFile {
             4 * via_count,        // via
             4 * (edge_count + 1), // toll_first
             4 * toll_count,       // toll_unit
+            2 * edge_count,       // rest_w
+            2 * edge_count,       // rest_h
+            edge_count,           // rest_veh
         ];
         let mut start = HEADER_LEN;
         let ranges = sizes.map(|size| {
@@ -230,6 +239,21 @@ impl GraphFile {
     pub fn tolls_of(&self, e: usize) -> &[u32] {
         &self.toll_unit()[self.toll_first()[e] as usize..self.toll_first()[e + 1] as usize]
     }
+
+    /// 간선마다 통과제한하중(kg). 0은 제한 없음
+    pub fn rest_w(&self) -> &[u16] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[17].clone()])
+    }
+
+    /// 간선마다 통과제한높이(cm). 0은 제한 없음
+    pub fn rest_h(&self) -> &[u16] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[18].clone()])
+    }
+
+    /// 간선마다 통행제한차량 코드. 0은 제한 없음
+    pub fn rest_veh(&self) -> &[u8] {
+        &self.mmap[self.ranges[19].clone()]
+    }
 }
 
 #[cfg(test)]
@@ -255,6 +279,10 @@ mod tests {
             LinkInput::new(1000005000, 1000000301, 1000000501, 100.0),
         ];
         links[4].geometry = vec![(37.000, 127.000), (37.0005, 126.9995), (37.001, 127.000)];
+        // 가 -> 라 링크는 높이 450cm, 하중 4,500kg 제한에 트럭 금지
+        links[4].rest_h = 450;
+        links[4].rest_w = 4500;
+        links[4].rest_veh = 4;
         Graph::build(&nodes, &links).0
     }
 
@@ -304,6 +332,12 @@ mod tests {
         assert_eq!(f.toll_unit(), g.toll_unit.as_slice());
         let e = g.link_id.iter().position(|&id| id == 1000002000).unwrap();
         assert_eq!(f.tolls_of(e), [29, 246]);
+        assert_eq!(f.rest_w(), g.rest_w.as_slice());
+        assert_eq!(f.rest_h(), g.rest_h.as_slice());
+        assert_eq!(f.rest_veh(), g.rest_veh.as_slice());
+        let e = g.link_id.iter().position(|&id| id == 1000003000).unwrap();
+        assert_eq!((f.rest_h()[e], f.rest_w()[e], f.rest_veh()[e]), (450, 4500, 4));
+        assert_eq!(f.rest_h().iter().filter(|&&h| h > 0).count(), 1);
 
         drop(f);
         std::fs::remove_file(&path).unwrap();

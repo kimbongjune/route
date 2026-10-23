@@ -100,4 +100,16 @@ fn main() {
         prev = cur;
     }
     println!("영업소 {}", units.iter().map(|u| format!("{u:03}")).collect::<Vec<_>>().join(" "));
+    // 경로 위 통과제한. 높이와 하중은 가장 작은 값, 통행제한차량은 코드별 링크 수
+    let (rest_h, rest_w, rest_veh) = (file.rest_h(), file.rest_w(), file.rest_veh());
+    let min_of = |v: &[u16]| links.iter().map(|id| v[edge_of[id]]).filter(|&x| x > 0).min();
+    let mut veh = std::collections::BTreeMap::new();
+    for id in &links {
+        let c = rest_veh[edge_of[id]];
+        if c > 0 {
+            *veh.entry(c).or_insert(0) += 1;
+        }
+    }
+    println!("통과제한 높이 {} 하중 {} 통행제한차량 {:?}",
+             min_of(rest_h).map_or("없음".to_string(), |h| format!("{h}cm")), min_of(rest_w).map_or("없음".to_string(), |w| format!("{w}kg")), veh);
 }

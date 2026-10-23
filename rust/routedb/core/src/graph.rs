@@ -8,12 +8,18 @@ pub struct LinkInput {
     pub length: f64,
     /// F_NODE에서 T_NODE 방향의 (위도, 경도) 목록
     pub geometry: Vec<(f64, f64)>,
+    /// 통행제한차량 REST_VEH. 0 제한 없음, 1 승용차, 2 승합차, 3 버스, 4 트럭, 5 이륜차, 6 기타
+    pub rest_veh: u8,
+    /// 통과제한하중 REST_W (kg). 0은 제한 없음
+    pub rest_w: u16,
+    /// 통과제한높이 REST_H (cm). 0은 제한 없음
+    pub rest_h: u16,
 }
 
 impl LinkInput {
-    /// 좌표 없이 LinkInput을 생성한다.
+    /// 좌표와 통과제한 없이 LinkInput을 생성한다.
     pub fn new(id: u64, from: u64, to: u64, length: f64) -> Self {
-        Self { id, from, to, length, geometry: Vec::new() }
+        Self { id, from, to, length, geometry: Vec::new(), rest_veh: 0, rest_w: 0, rest_h: 0 }
     }
 }
 
@@ -44,6 +50,12 @@ pub struct Graph {
     pub toll_first: Vec<u32>,
     /// 요금 지점 링크의 영업소코드
     pub toll_unit: Vec<u32>,
+    /// 간선마다 통과제한하중(kg). 0은 제한 없음
+    pub rest_w: Vec<u16>,
+    /// 간선마다 통과제한높이(cm). 0은 제한 없음
+    pub rest_h: Vec<u16>,
+    /// 간선마다 통행제한차량 코드. 0은 제한 없음
+    pub rest_veh: Vec<u8>,
 }
 
 impl Graph {
@@ -100,6 +112,9 @@ impl Graph {
             geom_lon,
             toll_first: vec![0; edges.len() + 1],
             toll_unit: Vec::new(),
+            rest_w: edges.iter().map(|e| e.2.rest_w).collect(),
+            rest_h: edges.iter().map(|e| e.2.rest_h).collect(),
+            rest_veh: edges.iter().map(|e| e.2.rest_veh).collect(),
         };
         (graph, skipped)
     }

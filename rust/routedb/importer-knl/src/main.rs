@@ -57,6 +57,13 @@ fn main() {
     let missing = graph.set_tolls(&tolls);
     let toll_edges = (0..graph.edge_count()).filter(|&e| !graph.tolls_of(e).is_empty()).count();
     println!("요금 지점 행 {} 그래프에 없는 링크 행 {} 요금 지점 간선 {} 영업소코드 {}", tolls.len(), missing, toll_edges, graph.toll_unit.len());
+    // 통과제한
+    let count = |v: &[u16]| v.iter().filter(|&&x| x > 0).count();
+    let mut veh = [0usize; 7];
+    for &c in &graph.rest_veh {
+        veh[c as usize] += 1;
+    }
+    println!("통과제한 높이 {} 하중 {} 통행제한차량 {:?}", count(&graph.rest_h), count(&graph.rest_w), veh);
 
     // 회전정보를 간선 번호의 회전 규칙으로 변환. 002, 003, 101, 102, 103은 금지, 011은 허용 U턴이다
     let edge_of: HashMap<u64, u32> = graph.link_id.iter().enumerate().map(|(e, &id)| (id, e as u32)).collect();
