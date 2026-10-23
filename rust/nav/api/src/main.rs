@@ -1,95 +1,23 @@
-//! 내비 API 서버. `RouteDb`를 `Arc`로 공유하며 `POST /route`로 경로를 반환한다.
+//! 내비 API 서버. 그래프 파일을 열어 `AppState`를 만들고 lib.rs의 `app`으로 라우터를 조립한다.
 //!
 //! cargo run --release -p nav-api -- [그래프 폴더] [주소]
 //! 그래프 폴더는 moct.rdb, moct.cch-struct, moct.cch-metric, moct.cch-metric-time, moct.cch-metric-free가 있는 폴더이다.
+//! 브이월드 인증키는 환경 변수 VWORLD_API_KEY 또는 저장소 루트 .env의 VWORLD_API_KEY에서 읽는다.
 
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::routing::post;
-use axum::{Json, Router};
-use routedb_core::route::{Profile, Route, RouteDb};
-use serde::{Deserialize, Serialize};
+use nav_api::state::AppState;
+use routedb_core::route::RouteDb;
 
 const DEFAULT_GRAPH_DIR: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb";
 const DEFAULT_ADDR: &str = "127.0.0.1:3000";
+const ENV_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../.env");
 
-/// 위경도
-#[derive(Clone, Copy, Debug, Deserialize)]
-struct LatLon {
-    lat: f64,
-    lon: f64,
-}
-
-/// `POST /route` 요청. 프로파일은 distance, time, free이며 없으면 distance이다
-#[derive(Debug, Deserialize)]
-struct RouteRequest {
-    from: LatLon,
-    to: LatLon,
-    #[serde(default = "default_profile")]
-    profile: Profile,
-}
-
-fn default_profile() -> Profile {
-    Profile::Distance
-}
-
-/// 경로가 없을 때의 응답
-#[derive(Serialize)]
-struct ErrorResponse {
-    error: String,
-}
-
-/// 경로 응답. `Route`에 탐색 시간을 더한다
-#[derive(Serialize)]
-struct RouteResponse {
-    #[serde(flatten)]
-    route: Route,
-    elapsed_ms: f64,
-}
-
-type Shared = Arc<RouteDb>;
-
-async fn route_handler(
-    State(db): State<Shared>,
-    Json(req): Json<RouteRequest>,
-) -> Result<Json<RouteResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // 탐색은 CPU 작업이므로 블로킹 스레드에서 실행한다
-    let result = tokio::task::spawn_blocking(move || {
-        let started = Instant::now();
-        let cch_view = db.cch_view();
-        let mut router = db.router(&cch_view);
-        let route = router.route(
-            (req.from.lat, req.from.lon),
-            (req.to.lat, req.to.lon),
-            req.profile,
-        );
-        (route, started.elapsed().as_secs_f64() * 1000.0)
-    })
-    .await
-    .expect("탐색 작업이 중단됨");
-    match result {
-        (Some(route), elapsed_ms) => Ok(Json(RouteResponse { route, elapsed_ms })),
-        (None, _) => Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: "경로 없음".to_string(),
-            }),
-        )),
-    }
-}
-
-#[tokio::main]
-async fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let dir = Path::new(args.first().map_or(DEFAULT_GRAPH_DIR, String::as_str));
-    let addr = args.get(1).map_or(DEFAULT_ADDR, String::as_str);
-
-    let started = Instant::now();
-    let db = RouteDb::open(
+/// 그래프 폴더의 파일 다섯 개로 `RouteDb`를 연다
+pub fn open_route_db(dir: &Path) -> std::io::Result<RouteDb> {
+    RouteDb::open(
         &dir.join("moct.rdb"),
         &dir.join("moct.cch-struct"),
         [
@@ -98,15 +26,45 @@ async fn main() {
             &dir.join("moct.cch-metric-free"),
         ],
     )
-    .expect("그래프 파일을 열지 못함");
+}
+
+/// 환경 변수에 없으면 .env 파일의 `이름=값` 줄에서 읽는다
+pub fn env_value(name: &str) -> Option<String> {
+    if let Ok(value) = std::env::var(name) {
+        return Some(value);
+    }
+    let text = std::fs::read_to_string(ENV_FILE).ok()?;
+    text.lines()
+        .filter_map(|line| line.strip_prefix(&format!("{name}=")))
+        .map(|value| {
+            value
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string()
+        })
+        .next()
+}
+
+#[tokio::main]
+async fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let dir = Path::new(args.first().map_or(DEFAULT_GRAPH_DIR, String::as_str));
+    let addr = args.get(1).map_or(DEFAULT_ADDR, String::as_str);
+    let vworld_key = env_value("VWORLD_API_KEY").expect("VWORLD_API_KEY가 없음");
+
+    let started = Instant::now();
+    let db = open_route_db(dir).expect("그래프 파일을 열지 못함");
     println!(
         "그래프와 CCH 번들 열기, R-tree 생성 {:.1}초",
         started.elapsed().as_secs_f64()
     );
 
-    let app = Router::new()
-        .route("/route", post(route_handler))
-        .with_state(Arc::new(db));
+    let app = nav_api::app(AppState {
+        db: Arc::new(db),
+        http: reqwest::Client::new(),
+        vworld_key,
+    });
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("주소에 바인드하지 못함");

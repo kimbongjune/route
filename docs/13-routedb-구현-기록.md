@@ -31,7 +31,23 @@ rust/
     routes_batch.rs         위경도 쌍 CSV를 받아 프로파일별 경로의 링크 열 출력
     cch_bench.rs            line graph CCH build, customize, query 시간과 다익스트라 대조
   nav/api/src/
-    main.rs                 axum 서버. RouteDb를 Arc로 공유하고 POST /route로 Route를 JSON으로 반환
+    main.rs                 그래프 파일을 열어 AppState를 만들고 서버 실행
+    lib.rs                  라우터 조립 app(). main.rs와 통합 테스트가 같이 사용
+    state.rs                AppState. Arc<RouteDb>
+    response.rs             ApiResponse. 모든 응답의 공통 구조
+    error.rs                AppError. 상태 코드와 결과 코드가 있는 실패 응답으로 변환
+    extract.rs              ApiJson, ApiQuery. 본문·쿼리 해석 실패를 400 응답으로 변환
+    route/mod.rs            경로 기능의 라우트 모음
+    route/model.rs          요청·응답 타입
+    route/handler.rs        HTTP 요청을 받아 service 호출
+    route/service.rs        요청 검증, 블로킹 스레드에서 RouteDb 호출
+    geocode/mod.rs          지오코딩 기능의 라우트 모음
+    geocode/model.rs        검색 요청·응답 타입
+    geocode/handler.rs      검색어를 받아 service 호출
+    geocode/service.rs      브이월드 검색 API 호출과 응답 변환
+  nav/api/tests/
+    route_api.rs            서버 없이 라우터에 요청을 보내는 통합 테스트
+    geocode_api.rs          .env의 키로 브이월드를 실제로 호출하는 통합 테스트
 ```
 
 ## 크레이트
@@ -44,6 +60,7 @@ rust/
 | `memmap2` 0.9 | 그래프 파일 mmap | 파일을 읽지 않고 메모리에 연결만 하므로 295MB 파일을 5ms에 연다 |
 | `rstar` 0.13 | 링크 선분 R-tree | 순수 Rust 구현이며 선분처럼 직접 정의한 도형을 넣을 수 있고 `bulk_load`로 1,023만 개를 4.6초에 만든다 |
 | `serde` 1.0, `serde_json` 1.0 | Route 타입의 JSON 직렬화 | `Route`, `Step`, `RoutePoi` 등에 `Serialize`를 derive하여 별도 변환 코드 없이 응답을 만든다 |
+| `reqwest` 0.13 | 브이월드 검색 API 호출 | tokio 위에서 동작하는 HTTP 클라이언트이며 `query` feature로 파라미터를 URL 인코딩하고 `json` feature로 응답을 `serde_json::Value`로 받는다 |
 | `axum` 0.8, `tokio` 1.54 | 내비 API 서버 | tokio 위에서 동작하는 HTTP 프레임워크이며 핸들러 인자로 상태와 JSON 본문을 받고 `Arc` 상태 공유가 `with_state` 하나로 된다 |
 | `cch` 0.3 | Customizable Contraction Hierarchies | 순수 Rust로 RoutingKit을 옮긴 구현이며 CSR 입력, 방향별 가중치, rayon 병렬 customize, mmap 번들 저장을 갖추었다 |
 
@@ -467,16 +484,31 @@ CCH 구조는 세 프로파일이 같고 metric만 다르므로 임포터가 거
 
 ## 내비 API
 
-`nav/api`는 routedb-core를 링크하여 `RouteDb`를 `Arc`로 갖고 있는 axum 서버이다. 시작할 때 그래프 폴더의 `moct.rdb`, `moct.cch-struct`, 프로파일별 metric 3개를 열어 `Arc<RouteDb>`를 `with_state`로 핸들러에 넘기며, `POST /route`는 출발·도착 위경도와 프로파일(distance, time, free, 없으면 distance)을 JSON으로 받아 `Route`를 JSON으로 반환한다. `Route`, `Snap`, `Step`, `RoutePoi`, `RoadSegment`, `Section`과 `Profile`, `PoiKind`, `Turn`, `SignColor`에 `serde`의 `Serialize`를 derive하여 응답을 별도 변환 없이 만들고, 열거형은 `distance`, `camera`, `exit_right`, `green`처럼 소문자로 직렬화한다. 경로 탐색은 CPU 작업이므로 `spawn_blocking`으로 블로킹 스레드에서 실행하며, `Router`가 CCH view를 빌리는 구조라 요청마다 `cch_view`와 `Router`를 새로 만든다. 경로가 없으면 404와 `{"error":"경로 없음"}`, 본문이나 프로파일이 잘못되면 axum이 422를 반환한다.
+`nav/api`는 routedb-core를 링크하여 `RouteDb`를 `Arc`로 갖고 있는 axum 서버이며, 기능마다 handler, service, model로 나누고 공통 상태와 에러를 `state.rs`, `error.rs`에 정의하는 구조로 구성하였다. `main.rs`는 그래프 폴더의 `moct.rdb`, `moct.cch-struct`, 프로파일별 metric 3개를 열어 `AppState`를 만들고 `lib.rs`의 `app`으로 라우터를 조립하며, 통합 테스트도 같은 `app`을 사용한다. `route/handler.rs`는 HTTP 요청을 받아 service를 호출하고 응답을 만들기만 하고, `route/service.rs`는 axum을 모른 채 위경도 범위를 검증하고 `RouteDb`를 호출하며, `route/model.rs`에 요청·응답 타입을 정의하였다. 데이터 접근 계층은 routedb-core의 `RouteDb` 자체이므로 별도 repository는 없다. 응답은 스프링의 `ResponseEntity`에 공통 본문을 실어 보내는 방식과 같이 성공과 실패가 한 구조이다. `response.rs`의 `ApiResponse`는 HTTP 상태 코드 `status`, 결과 코드 `code`, `message`, 성공일 때만 있는 `data`로 이루어지며 `IntoResponse`에서 `status`를 HTTP 상태 코드로도 사용한다. `error.rs`의 `AppError`는 `BadRequest` 400 BAD_REQUEST, `RouteNotFound` 404 ROUTE_NOT_FOUND, `NotFound` 404 NOT_FOUND(등록되지 않은 주소), `Upstream` 502 UPSTREAM_ERROR로 바뀌며, axum의 `Json`과 `Query`가 본문·쿼리 해석에 실패하면 본문 없는 422나 400을 보내므로 `extract.rs`의 `ApiJson`, `ApiQuery`가 그 실패를 `BadRequest`로 바꾸어 같은 구조로 나가게 한다. `POST /route`는 출발·도착 위경도와 프로파일(distance, time, free, 없으면 distance)을 JSON으로 받아 `Route`를 JSON으로 반환한다. `Route`, `Snap`, `Step`, `RoutePoi`, `RoadSegment`, `Section`과 `Profile`, `PoiKind`, `Turn`, `SignColor`에 `serde`의 `Serialize`를 derive하여 응답을 별도 변환 없이 만들고, 열거형은 `distance`, `camera`, `exit_right`, `green`처럼 소문자로 직렬화한다. 경로 탐색은 CPU 작업이므로 `spawn_blocking`으로 블로킹 스레드에서 실행하며, `Router`가 CCH view를 빌리는 구조라 요청마다 `cch_view`와 `Router`를 새로 만든다. 경로가 없으면 404 ROUTE_NOT_FOUND, 위경도가 범위를 벗어나거나 본문·프로파일이 잘못되면 400 BAD_REQUEST이며 메시지에 serde의 해석 실패 원인이 들어간다.
 
 | 요청 | 응답 |
 |---|---|
-| `{"from":{"lat":37.5547,"lon":126.9707},"to":{"lat":37.4979,"lon":127.0276}}` | 거리 10,063m, 링크 104개, 좌표 207개, 지점 13개, 구간 15개, 안내 지점 7개, 14,254바이트, 탐색 8ms |
+| `{"from":{"lat":37.5547,"lon":126.9707},"to":{"lat":37.4979,"lon":127.0276}}` | 거리 10,063m, 링크 104개, 좌표 207개, 지점 13개, 구간 15개, 안내 지점 7개, 14,307바이트, 탐색 8ms |
 | 같은 출발에 `"to":{"lat":35.1151,"lon":129.0422},"profile":"time"` | 거리 398,564m, 링크 901개, 안내 지점 13개, 영업소 101·091·252·080, 탐색 9ms |
-| 출발 33.0, 126.0 | 404 |
-| `"profile":"fast"` | 422 |
+| 출발 33.0, 126.0 | 404 `{"status":404,"code":"ROUTE_NOT_FOUND","message":"경로 없음"}` |
+| 출발 위도 91.0 | 400 BAD_REQUEST, 메시지 "위경도 범위를 벗어남: 91, 126" |
+| `"profile":"fast"` | 400 BAD_REQUEST, 메시지 "본문이 잘못됨: Failed to deserialize the JSON body into the target type: profile: unknown variant `fast`, expected one of `distance`, `time`, `free` at line 1 column 91" |
+| `GET /nothing` | 404 `{"status":404,"code":"NOT_FOUND","message":"없는 주소: /nothing"}` |
 
-응답의 `elapsed_ms`는 스냅부터 `Route` 생성까지의 시간이며 `Router`를 재사용하는 경로 CLI의 1ms보다 긴 것은 요청마다 `PathQuery` 버퍼를 교차로 수만큼 할당하기 때문이다. 9단계에서 가중치 갱신 시 `Arc` 스왑 방식을 정할 때 `Router` 재사용 방식을 함께 정할 예정이다. `GET /geocode`, 사고다발 교차, 안내문은 다음 항목에서 추가할 예정이다.
+응답의 `elapsed_ms`는 스냅부터 `Route` 생성까지의 시간이며 `Router`를 재사용하는 경로 CLI의 1ms보다 긴 것은 요청마다 `PathQuery` 버퍼를 교차로 수만큼 할당하기 때문이다. 9단계에서 가중치 갱신 시 `Arc` 스왑 방식을 정할 때 `Router` 재사용 방식을 함께 정할 예정이다.
+
+### 지오코딩
+
+목적지를 글자로 입력하면 `POST /route`에 넣을 위경도가 필요하므로 `GET /geocode`를 추가하였다. 출발지는 GPS 좌표이고 지도를 눌러 찍은 목적지도 좌표가 바로 나오므로 지오코딩은 목적지 검색에만 사용한다. 1차에서는 브이월드 검색 API를 사용하되 브라우저가 직접 호출하면 인증키가 노출되므로 서버가 대신 호출한다. `GET /geocode?q=검색어&type=place|address&size=10`은 `type`이 `place`(없을 때 기본)이면 브이월드 검색 API `api.vworld.kr/req/search`를 `type=PLACE`로, `address`이면 `type=ADDRESS`, `category=ROAD`로 호출하고, 결과마다 장소명 `title`, 도로명주소(없으면 지번주소) `address`, 위경도를 담아 전체 건수 `total`과 함께 반환한다. 브이월드는 좌표를 문자열로 주므로 문자열과 숫자를 모두 받아 변환하며, 상태가 `NOT_FOUND`이면 빈 목록, `ERROR`이면 502 UPSTREAM_ERROR와 브이월드 오류 문구를 반환하고 검색어가 비어 있거나 `q`가 없으면 400 BAD_REQUEST이다. 인증키는 환경 변수 `VWORLD_API_KEY` 또는 저장소 루트 `.env`에서 읽어 `AppState`에 갖고 있고 `reqwest::Client`도 `AppState`로 공유한다.
+
+| 요청 | 응답 |
+|---|---|
+| `q=서울역&size=3` | `data`에 전체 554건, 첫 결과 서울역 서울특별시 용산구 한강대로 367 (37.551211, 126.971903) |
+| `type=address&q=서울특별시 중구 한강대로 405` | 전체 5건, 첫 결과 서울특별시 중구 한강대로 405 (봉래동2가) (37.554730, 126.969526) |
+| `q=` | 400 BAD_REQUEST, 메시지 "q가 비어 있음" |
+| `q` 없음 | 400 BAD_REQUEST, 메시지 "쿼리가 잘못됨: Failed to deserialize query string: missing field `q`" |
+
+17단계에서 도로명주소 전자지도로 지오코더를 직접 만들어 브이월드 의존을 뺄 예정이다. 사고다발 교차와 안내문은 다음 항목에서 추가할 예정이다.
 
 ## 코드 규약
 
@@ -588,7 +620,7 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 
 ## 테스트
 
-`cargo test --workspace`로 34개를 실행한다.
+`cargo test --workspace`로 38개를 실행한다. `geocode_api`는 `.env`의 키로 브이월드를 실제로 호출하며 키가 없으면 건너뛴다. `route_api`는 전국 그래프 파일을 열어 라우터에 요청을 보내므로 debug 빌드에서는 R-tree 생성에 129초가 소요되고 `cargo test --release -p nav-api`로는 3초이다.
 
 | 파일 | 테스트 | 확인 내용 |
 |---|---|---|
@@ -618,6 +650,10 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 | `linegraph.rs` | `join_rule_path_over_long_link` | 30m 연결 링크가 낀 U턴이 25m 그룹으로는 걸리지 않고, 회전정보 경로로 묶으면 걸리며 금지보다 우선 |
 | `linegraph.rs` | `bridge_uturn_without_link` | 잇는 링크가 없는 011에 건너가는 통행이 생기고 비용이 8m와 진출 링크 길이의 합 |
 | `profile.rs` | `time_and_free_weights` | 링크 4개 통행 4개의 시간 가중치, 건너가는 10m의 시간, 요금소·고속국도로 들어가는 통행 3개가 `INF_WEIGHT`, 거리 가중치 cm |
+| `nav/api` `service.rs` | `lat_lon_out_of_range_is_rejected` | 위도 91, 경도 -181은 400 |
+| `nav/api` `geocode/service.rs` | `parse_place_and_not_found` | 브이월드 PLACE 응답의 서울역 한 건 변환과 좌표 없는 건 제외, NOT_FOUND는 빈 목록, ERROR는 502 |
+| `nav/api` `tests/geocode_api.rs` | `geocode_requests` | 서울역 장소 검색의 첫 결과와 좌표 범위, 한강대로 405 주소 검색, 없는 장소는 빈 목록, 빈 검색어는 400 |
+| `nav/api` `tests/route_api.rs` | `route_requests` | 서울역→강남역 링크 104개와 첫 안내 좌회전 한강대로77길, 서울역→부산역 최소시간 영업소 4곳, 바다 출발 404 ROUTE_NOT_FOUND, 위도 91과 프로파일 fast는 400 BAD_REQUEST, 없는 주소 404 NOT_FOUND |
 | `file.rs` | `write_and_open_same_graph`, `open_other_file` | 저장 후 다시 열면 배열 32개 일치, 가→라 링크의 높이 450cm·하중 4,500kg·트럭 금지·제한속도 30·도로등급 104·연결로, 지점 2개의 배열과 간선별 범위, 도로명 3개와 가→라 링크의 도로명 능안로, 다른 파일은 에러 |
 
 ## 실행
@@ -637,6 +673,7 @@ cargo run --release -p importer-knl --example routes_batch -- pairs.csv free
 cargo run --release -p importer-knl --example cch_bench
 cargo run --release -p nav-api
 curl -X POST http://127.0.0.1:3000/route -H "Content-Type: application/json" -d '{"from":{"lat":37.5547,"lon":126.9707},"to":{"lat":37.4979,"lon":127.0276},"profile":"time"}'
+curl "http://127.0.0.1:3000/geocode?q=서울역&size=3"
 python -X utf8 scripts/nodelink/turninfo_check.py
 python -X utf8 scripts/nodelink/uturn_rule_check.py
 python -X utf8 scripts/nodelink/kakao_route_compare.py
