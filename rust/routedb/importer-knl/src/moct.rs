@@ -67,7 +67,7 @@ pub fn read_turns(folder: &Path) -> Vec<Turn> {
     turns
 }
 
-/// MOCT_LINK.shp에서 링크별 LINK_ID, F_NODE, T_NODE, LENGTH, TM 좌표 목록 (x, y), 통과제한 REST_VEH, REST_W, REST_H를 추출한다.
+/// MOCT_LINK.shp에서 링크별 LINK_ID, F_NODE, T_NODE, LENGTH, TM 좌표 목록 (x, y), 통과제한 REST_VEH, REST_W, REST_H, 제한속도 MAX_SPD, 도로등급 ROAD_RANK를 추출한다.
 /// ROAD_USE=1 미사용 링크는 제외한다.
 pub fn read_links(folder: &Path) -> Vec<LinkInput> {
     let mut reader = shapefile::Reader::from_path(folder.join("MOCT_LINK.shp")).unwrap();
@@ -86,7 +86,9 @@ pub fn read_links(folder: &Path) -> Vec<LinkInput> {
         let rest_veh: u8 = text_field(&record, "REST_VEH").unwrap().trim().parse().unwrap();
         let rest_w = numeric_field(&record, "REST_W").unwrap() as u16;
         let rest_h = numeric_field(&record, "REST_H").unwrap() as u16;
-        links.push(LinkInput { id, from, to, length, geometry, rest_veh, rest_w, rest_h });
+        let max_spd = numeric_field(&record, "MAX_SPD").unwrap() as u16;
+        let road_rank: u8 = text_field(&record, "ROAD_RANK").unwrap().trim().parse().unwrap();
+        links.push(LinkInput { id, from, to, length, geometry, rest_veh, rest_w, rest_h, max_spd, road_rank });
     }
     links
 }

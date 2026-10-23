@@ -41,6 +41,8 @@ def main():
     no = links[links.LINK_ID == ""]
     print("요금지점_링크:", len(links), "행, 링크 있는 영업소", len(with_link), "링크 없는 영업소", sorted(set(no.영업소코드 + " " + no.영업소명)))
     print("  구간 처리 링크", links.영업소명[links.기준 == "구간"].value_counts(sort=False).to_dict())
+    expanded = links[links.기준.str.contains("램프 확장")]
+    print("  램프 확장 행", len(expanded), "영업소", expanded.영업소코드.nunique(), "| 링크", links.LINK_ID[links.LINK_ID != ""].nunique())
 
 
 

@@ -1,5 +1,5 @@
-// 출발 위경도와 도착 위경도를 받아 line graph CCH 번들로 경로와 거리를 출력한다.
-// cargo run --release -p importer-knl --example route_cli -- 37.5547 126.9707 37.4979 127.0276
+// 출발 위경도와 도착 위경도를 받아 line graph CCH 번들로 경로와 거리를 출력한다. 다섯 번째 인자는 프로파일이며 distance, time, free 중 하나이고 없으면 distance이다.
+// cargo run --release -p importer-knl --example route_cli -- 37.5547 126.9707 37.4979 127.0276 time
 use std::path::Path;
 use std::time::Instant;
 
@@ -7,11 +7,14 @@ use cch::bundle::{CchBundle, MetricBundle};
 use cch::path::PathQuery;
 use routedb_core::file::GraphFile;
 use routedb_core::hierarchy::edges_of_node_path;
+use routedb_core::profile::link_time_ms;
 use routedb_core::snap::{LinkIndex, Snap};
 
 const GRAPH_FILE_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.rdb";
 const CCH_STRUCT_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-struct";
 const CCH_METRIC_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-metric";
+const CCH_METRIC_TIME_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-metric-time";
+const CCH_METRIC_FREE_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-metric-free";
 
 /// 간선 e의 평면 좌표상 길이(m)를 좌표 목록으로 계산한다.
 fn planar_length(file: &GraphFile, e: usize) -> f64 {
@@ -33,17 +36,27 @@ fn fraction(file: &GraphFile, snap: &Snap) -> f64 {
 }
 
 fn main() {
-    let args: Vec<f64> = std::env::args().skip(1).map(|a| a.parse().expect("위경도는 숫자여야 함")).collect();
-    let [from_lat, from_lon, to_lat, to_lon] = args[..] else {
-        eprintln!("사용법: route_cli 출발위도 출발경도 도착위도 도착경도");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let coords: Vec<f64> = args.iter().take(4).map(|a| a.parse().expect("위경도는 숫자여야 함")).collect();
+    let [from_lat, from_lon, to_lat, to_lon] = coords[..] else {
+        eprintln!("사용법: route_cli 출발위도 출발경도 도착위도 도착경도 [distance|time|free]");
         std::process::exit(1);
+    };
+    let metric_location = match args.get(4).map(String::as_str) {
+        None | Some("distance") => CCH_METRIC_LOCATION,
+        Some("time") => CCH_METRIC_TIME_LOCATION,
+        Some("free") => CCH_METRIC_FREE_LOCATION,
+        Some(other) => {
+            eprintln!("프로파일 {other}는 없음. distance, time, free 중 하나");
+            std::process::exit(1);
+        }
     };
 
     let started = Instant::now();
     let file = GraphFile::open(Path::new(GRAPH_FILE_LOCATION)).unwrap();
     let index = LinkIndex::build(file.geom_first(), file.geom_lat(), file.geom_lon());
     let cch = CchBundle::open(Path::new(CCH_STRUCT_LOCATION)).unwrap();
-    let metric = MetricBundle::open(Path::new(CCH_METRIC_LOCATION)).unwrap();
+    let metric = MetricBundle::open(Path::new(metric_location)).unwrap();
     let (cch_v, metric_v) = (cch.view(), metric.view());
     let mut query = PathQuery::new(&cch_v);
     println!("그래프와 CCH 번들 열기, R-tree 생성 {:.1}초", started.elapsed().as_secs_f64());
@@ -81,16 +94,22 @@ fn main() {
             }
         }
     }
+    let elapsed = started.elapsed().as_secs_f64() * 1000.0;
     let Some((from, to, total, links)) = result else {
         println!("경로 없음");
         return;
     };
     println!("출발 스냅 링크 {} 거리 {:.1}m | 도착 스냅 링크 {} 거리 {:.1}m",
              link_id[from.edge as usize], from.distance_m, link_id[to.edge as usize], to.distance_m);
-    println!("거리 {:.0}m 링크 {}개 ({:.0}ms)", total, links.len(), started.elapsed().as_secs_f64() * 1000.0);
     println!("{}", links.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(" "));
-    // 경로가 지나는 요금 지점의 영업소코드를 지나는 순서로 출력한다
     let edge_of: std::collections::HashMap<u64, usize> = link_id.iter().enumerate().map(|(e, &id)| (id, e)).collect();
+    // 통행 시간은 링크 길이를 제한속도로 나눈 시간의 합이며 출발·도착 링크는 스냅 위치 비율만큼 더한다
+    let max_spd = file.max_spd();
+    let time_of = |e: usize, part: f64| link_time_ms(length, max_spd, e) * part / 1000.0;
+    let seconds: f64 = time_of(from.edge as usize, 1.0 - fraction(&file, from)) + time_of(to.edge as usize, fraction(&file, to))
+        + links[1..links.len() - 1].iter().map(|id| time_of(edge_of[id], 1.0)).sum::<f64>();
+    println!("거리 {:.0}m 시간 {:.0}분 링크 {}개 ({:.0}ms)", total, seconds / 60.0, links.len(), elapsed);
+    // 경로가 지나는 요금 지점의 영업소코드를 지나는 순서로 출력한다
     // 바로 앞 링크에도 있던 영업소는 같은 요금소이므로 다시 넣지 않는다
     let mut units: Vec<u32> = Vec::new();
     let mut prev: &[u32] = &[];

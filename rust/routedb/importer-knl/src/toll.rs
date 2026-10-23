@@ -26,7 +26,7 @@ mod tests {
     #[test]
     fn read_toll_link_rows() {
         let tolls = read_toll_links(Path::new(TOLL_LINKS_LOCATION));
-        assert_eq!(tolls.len(), 2450);
+        assert_eq!(tolls.len(), 4497);
         assert!(tolls.contains(&(1410199400, 246)));
     }
 }

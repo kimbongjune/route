@@ -5,4 +5,5 @@ pub mod graph;
 pub mod hierarchy;
 pub mod hilbert;
 pub mod linegraph;
+pub mod profile;
 pub mod snap;

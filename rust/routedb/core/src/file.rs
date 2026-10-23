@@ -10,14 +10,14 @@ use crate::linegraph::LineGraph;
 
 /// 그래프 파일 맨 앞 8바이트
 pub const MAGIC: &[u8; 8] = b"ROUTEDB\0";
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 7;
 /// MAGIC 8 + VERSION 4 + 빈칸 4 + 교차로 수 8 + 간선 수 8 + 링크 좌표 수 8 + 통행 수 8 + 경유 링크 수 8 + 영업소코드 수 8
 pub const HEADER_LEN: usize = 64;
 
 impl Graph {
     /// 그래프와 line graph를 헤더, 8바이트 배열(node_id, link_id, length, lat, lon, geom_lat, geom_lon, turn_weight),
     /// 4바이트 배열(first_out, head, geom_first, turn_first_out, turn_head, via_first, via, toll_first, toll_unit),
-    /// 2바이트 배열(rest_w, rest_h), 1바이트 배열(rest_veh) 순서로 파일에 저장한다.
+    /// 2바이트 배열(rest_w, rest_h, max_spd), 1바이트 배열(rest_veh, road_rank) 순서로 파일에 저장한다.
     pub fn write(&self, line: &LineGraph, path: &Path) -> Result<()> {
         let mut w = BufWriter::new(File::create(path)?);
 
@@ -56,7 +56,9 @@ impl Graph {
         // 2바이트 배열과 1바이트 배열
         w.write_all(bytemuck::cast_slice(&self.rest_w))?;
         w.write_all(bytemuck::cast_slice(&self.rest_h))?;
+        w.write_all(bytemuck::cast_slice(&self.max_spd))?;
         w.write_all(&self.rest_veh)?;
+        w.write_all(&self.road_rank)?;
 
         w.flush()
     }
@@ -72,7 +74,7 @@ pub struct GraphFile {
     via_count: usize,
     toll_count: usize,
     /// 배열별 파일 내 위치
-    ranges: [Range<usize>; 20],
+    ranges: [Range<usize>; 22],
 }
 
 impl GraphFile {
@@ -117,7 +119,9 @@ impl GraphFile {
             4 * toll_count,       // toll_unit
             2 * edge_count,       // rest_w
             2 * edge_count,       // rest_h
+            2 * edge_count,       // max_spd
             edge_count,           // rest_veh
+            edge_count,           // road_rank
         ];
         let mut start = HEADER_LEN;
         let ranges = sizes.map(|size| {
@@ -250,9 +254,19 @@ impl GraphFile {
         bytemuck::cast_slice(&self.mmap[self.ranges[18].clone()])
     }
 
+    /// 간선마다 최고제한속도(km/h)
+    pub fn max_spd(&self) -> &[u16] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[19].clone()])
+    }
+
     /// 간선마다 통행제한차량 코드. 0은 제한 없음
     pub fn rest_veh(&self) -> &[u8] {
-        &self.mmap[self.ranges[19].clone()]
+        &self.mmap[self.ranges[20].clone()]
+    }
+
+    /// 간선마다 도로등급. 101 고속국도부터 108 기타
+    pub fn road_rank(&self) -> &[u8] {
+        &self.mmap[self.ranges[21].clone()]
     }
 }
 
@@ -283,6 +297,8 @@ mod tests {
         links[4].rest_h = 450;
         links[4].rest_w = 4500;
         links[4].rest_veh = 4;
+        links[4].max_spd = 30;
+        links[4].road_rank = 104;
         Graph::build(&nodes, &links).0
     }
 
@@ -335,8 +351,10 @@ mod tests {
         assert_eq!(f.rest_w(), g.rest_w.as_slice());
         assert_eq!(f.rest_h(), g.rest_h.as_slice());
         assert_eq!(f.rest_veh(), g.rest_veh.as_slice());
+        assert_eq!(f.max_spd(), g.max_spd.as_slice());
+        assert_eq!(f.road_rank(), g.road_rank.as_slice());
         let e = g.link_id.iter().position(|&id| id == 1000003000).unwrap();
-        assert_eq!((f.rest_h()[e], f.rest_w()[e], f.rest_veh()[e]), (450, 4500, 4));
+        assert_eq!((f.rest_h()[e], f.rest_w()[e], f.rest_veh()[e], f.max_spd()[e], f.road_rank()[e]), (450, 4500, 4, 30, 104));
         assert_eq!(f.rest_h().iter().filter(|&&h| h > 0).count(), 1);
 
         drop(f);

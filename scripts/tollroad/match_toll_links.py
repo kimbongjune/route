@@ -4,6 +4,9 @@
 - 기준이 MOCT노드인 영업소는 NODE_IDS의 노드에 F_NODE나 T_NODE로 접한 링크를 모두 기록하며 하이패스IC 노드는 램프만 기록한다.
   거리m, 거리순위는 비워 둔다.
 - 기준이 국가POI나 도로공사인 영업소는 그 좌표 반경 RADIUS_M 이내의 링크 중 최근접 링크와 도로명, 램프 여부가 같은 링크를 거리순으로 기록한다.
+  최근접 링크가 본선이면 PLAZA_M 안의 링크는 도로명과 램프 여부가 달라도 기록한다. 본선 요금소는 나란한 램프 차로까지 덮는다.
+- 램프 요금소는 나들목의 램프마다 요금소를 지나므로 선택한 램프 링크와 노드로 이어진 같은 도로명의 램프 링크를 요금 지점 EXPAND_M 안에서 더한다.
+  다른 도로명의 고속국도 링크에 닿는 램프는 분기점 연결로이므로 더하지 않으며, 링크를 방향별로 직접 지정한 영업소와 휴게소 하이패스 영업소도 더하지 않는다.
 - 스마트톨링 구간인 용마터널 030과 청라하늘대교 032는 양 끝 노드 이름으로 노드를 찾고 링크 길이 기준 양방향 최단 경로의 링크를 기록한다.
     030 용마터널: 용마터널(서측) <-> 용마터널(동측)
     032 청라하늘대교: 제3연륙교(서측) <-> 제3연륙교(동측)
@@ -25,6 +28,8 @@ from common import TOLLROAD_DIR, read_csv, write_csv
 from nodelink import points, read_links, read_nodes
 
 RADIUS_M = 100.0
+PLAZA_M = 30.0      # 본선 요금소에서 이 거리 안의 링크는 도로명과 램프 여부가 달라도 요금소를 지나는 링크로 본다
+EXPAND_M = 500.0    # 선택한 램프 링크와 이어진 램프 링크를 더하는 영업소 요금 지점으로부터의 거리
 SECTIONS = [("030", "용마터널", "용마터널(서측)", "용마터널(동측)"),
             ("032", "청라하늘대교", "제3연륙교(서측)", "제3연륙교(동측)")]
 LINK_FIELDS = ["LINK_ID", "F_NODE", "T_NODE", "ROAD_NAME", "ROAD_RANK", "ROAD_USE", "CONNECT", "LENGTH"]
@@ -86,14 +91,62 @@ def main():
                 no_link.append(f"{u.영업소코드} {u.영업소명}")
         else:
             hits = near.get(i, [])
-            if hits:  # 램프 요금소 옆의 본선이 포함되지 않도록 최근접 링크와 도로명, 램프 여부가 같은 링크만 남긴다
+            if hits:  # 램프 요금소 옆의 본선이 포함되지 않도록 최근접 링크와 도로명, 램프 여부가 같은 링크만 남긴다.
+                # 본선 요금소는 모든 차로를 덮으므로 PLAZA_M 안의 링크는 도로명과 램프 여부가 달라도 남긴다
                 l0 = by_id[hits[0][1]]
-                hits = [h for h in hits if (by_id[h[1]]["ROAD_NAME"], by_id[h[1]]["CONNECT"]) == (l0["ROAD_NAME"], l0["CONNECT"])]
+                hits = [h for h in hits if (by_id[h[1]]["ROAD_NAME"], by_id[h[1]]["CONNECT"]) == (l0["ROAD_NAME"], l0["CONNECT"])
+                        or (l0["CONNECT"] == "0" and h[0] <= PLAZA_M)]
             for rank, (d, lid) in enumerate(hits, 1):
                 rows.append({**base, "이름": u.참조명, **link_row(by_id[lid], 거리m=round(d, 1), 거리순위=rank)})
             if not hits:
                 rows.append({**base, "이름": u.참조명})
                 no_link.append(f"{u.영업소코드} {u.영업소명} ({u.참조명})")
+
+    # 램프 요금소는 나들목의 램프마다 요금소를 지나므로, 선택한 램프 링크와 노드로 이어진 같은 도로명의 램프 링크를 EXPAND_M 안에서 더한다.
+    # 다른 도로명의 고속국도 링크에 닿는 램프는 분기점 연결로이므로 더하지 않는다
+    ramp = links[links.CONNECT == "1"]
+    ramp_adj = defaultdict(list)
+    for l in ramp.drop(columns="geometry").to_dict("records"):
+        ramp_adj[l["F_NODE"]].append(l)
+        ramp_adj[l["T_NODE"]].append(l)
+    hw_nodes = defaultdict(set)   # 노드 -> 닿는 고속국도 도로명
+    for l in links[links.ROAD_RANK == "101"].drop(columns="geometry").itertuples():
+        hw_nodes[l.F_NODE].add(l.ROAD_NAME)
+        hw_nodes[l.T_NODE].add(l.ROAD_NAME)
+    mid = links.geometry.interpolate(0.5, normalized=True)
+    mid_xy = {lid: (p.x, p.y) for lid, p in zip(links.LINK_ID, mid)}
+    centers = {}
+    for code, g in units[units.위도 != ""].groupby("영업소코드"):
+        pts = points(g)
+        centers[code] = (pts.geometry.x.mean(), pts.geometry.y.mean())
+    expanded = []
+    for code, g in pd.DataFrame(rows, dtype=object).groupby("영업소코드"):
+        # 링크를 방향별로 직접 지정한 영업소와 휴게소 하이패스는 더하지 않는다. 분기점은 반대 방향 램프가 다른 영업소이고
+        # 휴게소는 본선에서 휴게소로 드나드는 램프에 요금소가 없다
+        if g.기준.iloc[0].startswith("링크지정") or "방향 구분" in g.기준.iloc[0] or "휴게소" in g.영업소명.iloc[0]:
+            continue
+        seeds = [r for r in g.itertuples() if r.램프 == "Y" and code in centers]
+        have = set(g.LINK_ID.dropna())
+        cx, cy = centers.get(code, (None, None))
+        stack = [by_id[r.LINK_ID] for r in seeds]
+        seen = set(have)
+        while stack:
+            l = stack.pop()
+            for n in (l["F_NODE"], l["T_NODE"]):
+                for m in ramp_adj[n]:
+                    if m["LINK_ID"] in seen or m["ROAD_NAME"] != l["ROAD_NAME"]:
+                        continue
+                    x, y = mid_xy[m["LINK_ID"]]
+                    if ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5 > EXPAND_M:
+                        continue
+                    if any(hw_nodes[k] - {m["ROAD_NAME"]} for k in (m["F_NODE"], m["T_NODE"])):
+                        continue
+                    seen.add(m["LINK_ID"])
+                    stack.append(m)
+                    base = {"영업소코드": code, "영업소명": g.영업소명.iloc[0], "기준": g.기준.iloc[0] + "(램프 확장)"}
+                    expanded.append({**base, "이름": g.이름.iloc[0], **link_row(m)})
+    rows += expanded
+    print("램프 확장 링크", len(expanded), "영업소", len({r["영업소코드"] for r in expanded}))
 
     names = {n for _, _, a, b in SECTIONS for n in (a, b)}
     nodes = read_nodes(["NODE_ID", "NODE_NAME"], geometry=False)

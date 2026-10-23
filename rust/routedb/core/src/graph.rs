@@ -14,12 +14,16 @@ pub struct LinkInput {
     pub rest_w: u16,
     /// 통과제한높이 REST_H (cm). 0은 제한 없음
     pub rest_h: u16,
+    /// 최고제한속도 MAX_SPD (km/h)
+    pub max_spd: u16,
+    /// 도로등급 ROAD_RANK. 101 고속국도부터 108 기타
+    pub road_rank: u8,
 }
 
 impl LinkInput {
     /// 좌표와 통과제한 없이 LinkInput을 생성한다.
     pub fn new(id: u64, from: u64, to: u64, length: f64) -> Self {
-        Self { id, from, to, length, geometry: Vec::new(), rest_veh: 0, rest_w: 0, rest_h: 0 }
+        Self { id, from, to, length, geometry: Vec::new(), rest_veh: 0, rest_w: 0, rest_h: 0, max_spd: 60, road_rank: 107 }
     }
 }
 
@@ -56,6 +60,10 @@ pub struct Graph {
     pub rest_h: Vec<u16>,
     /// 간선마다 통행제한차량 코드. 0은 제한 없음
     pub rest_veh: Vec<u8>,
+    /// 간선마다 최고제한속도(km/h)
+    pub max_spd: Vec<u16>,
+    /// 간선마다 도로등급
+    pub road_rank: Vec<u8>,
 }
 
 impl Graph {
@@ -115,6 +123,8 @@ impl Graph {
             rest_w: edges.iter().map(|e| e.2.rest_w).collect(),
             rest_h: edges.iter().map(|e| e.2.rest_h).collect(),
             rest_veh: edges.iter().map(|e| e.2.rest_veh).collect(),
+            max_spd: edges.iter().map(|e| e.2.max_spd).collect(),
+            road_rank: edges.iter().map(|e| e.2.road_rank).collect(),
         };
         (graph, skipped)
     }

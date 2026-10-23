@@ -10,6 +10,7 @@ use routedb_core::file::GraphFile;
 use routedb_core::graph::{Graph, LinkInput};
 use routedb_core::hierarchy;
 use routedb_core::linegraph::{self, LineGraph, LineGraphInput, TurnRule};
+use routedb_core::profile::ProfileInput;
 use routedb_core::snap::LinkIndex;
 use routedb_core::{dijkstra, hilbert};
 
@@ -19,6 +20,8 @@ use moct::MOCT_SHPFILE_FOLDER_LOCATION;
 const GRAPH_FILE_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.rdb";
 const CCH_STRUCT_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-struct";
 const CCH_METRIC_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-metric";
+const CCH_METRIC_TIME_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-metric-time";
+const CCH_METRIC_FREE_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-metric-free";
 
 fn main() {
     let folder = Path::new(MOCT_SHPFILE_FOLDER_LOCATION);
@@ -251,6 +254,21 @@ fn main() {
     metric.save(Path::new(CCH_METRIC_LOCATION)).unwrap();
     println!("저장 {} {}바이트, {} {}바이트", CCH_STRUCT_LOCATION, std::fs::metadata(CCH_STRUCT_LOCATION).unwrap().len(),
              CCH_METRIC_LOCATION, std::fs::metadata(CCH_METRIC_LOCATION).unwrap().len());
+
+    // 최소시간과 무료도로 프로파일의 metric
+    let profile = ProfileInput {
+        turn_first_out: file.turn_first_out(), turn_head: file.turn_head(), turn_weight: file.turn_weight(),
+        via_first: file.via_first(), via: file.via(), length: file.length(), max_spd: file.max_spd(),
+        toll_first: file.toll_first(), toll_unit: file.toll_unit(), road_rank: file.road_rank(),
+    };
+    for (name, weights, location) in [("최소시간", profile.time_weights(), CCH_METRIC_TIME_LOCATION), ("무료도로", profile.free_weights(), CCH_METRIC_FREE_LOCATION)] {
+        let started = Instant::now();
+        let metric = cch.customize(&weights);
+        let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+        metric.save(Path::new(location)).unwrap();
+        println!("{} customize {:.0}ms 막힌 통행 {} 가중치 합 {}ms 저장 {} {}바이트", name, elapsed, weights.iter().filter(|&&w| w == cch::INF_WEIGHT).count(),
+                 weights.iter().filter(|&&w| w != cch::INF_WEIGHT).map(|&w| w as u64).sum::<u64>(), location, std::fs::metadata(location).unwrap().len());
+    }
 
     // 링크 선분 R-tree 생성과 서울역 좌표 스냅
     let started = Instant::now();
