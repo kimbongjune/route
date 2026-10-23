@@ -500,7 +500,7 @@ CCH 구조는 세 프로파일이 같고 metric만 다르므로 임포터가 거
 | `"profile":"fast"` | 400 BAD_REQUEST, 메시지 "본문이 잘못됨: Failed to deserialize the JSON body into the target type: profile: unknown variant `fast`, expected one of `distance`, `time`, `free` at line 1 column 91" |
 | `GET /nothing` | 404 `{"status":404,"code":"NOT_FOUND","message":"없는 주소: /nothing"}` |
 
-응답의 `elapsed_ms`는 스냅부터 `Route` 생성까지의 시간이며 `Router`를 재사용하는 경로 CLI의 1ms보다 긴 것은 요청마다 `PathQuery` 버퍼를 교차로 수만큼 할당하기 때문이다. 9단계에서 가중치 갱신 시 `Arc` 스왑 방식을 정할 때 `Router` 재사용 방식을 함께 정할 예정이다.
+응답의 `elapsed_ms`는 스냅부터 `Route` 생성까지의 시간이며 `Router`를 재사용하는 경로 CLI의 1ms보다 긴 것은 요청마다 `PathQuery` 버퍼를 교차로 수만큼 할당하기 때문이다. `Router` 재사용은 가중치 갱신 시 metric 묶음을 `Arc`로 바꾸는 구조와 맞물리므로 실시간 반영 뒤에 정할 예정이다.
 
 ### 지오코딩
 
@@ -532,6 +532,14 @@ CCH 구조는 세 프로파일이 같고 metric만 다르므로 임포터가 거
 프론트가 현재 위치와 거리로 안내 시점을 정하고 서버는 문장을 만들기로 하여 `POST /route` 응답에 `instructions`와 `warnings`를 추가하였다. `route/guidance.rs`의 `instructions`는 안내 지점마다 거리, 위경도, 문장, 회전, 표지 색을 담은 `Instruction`을 만들며 문장은 "교차로 이름에서 회전, 도로명" 꼴이다. 교차로 이름은 그래프 파일의 `NODE_NAME`인데 교차로 이름이 없는 노드는 "하월곡동 26-14"처럼 지번이 들어 있으므로 `is_intersection_name`이 마지막 낱말이 숫자나 "숫자-숫자"로 끝나면 지번으로 보고 문장에서 뺀다. 회전 문구는 직진, 왼쪽 방향, 오른쪽 방향, 좌회전, 우회전, 유턴, 왼쪽 출구, 오른쪽 출구이며 분기가 4개 이상이면 "1시 방향"처럼 시계 방향으로 쓰고, 출구는 도로명 뒤에 "방면"을 붙인다. 서울역에서 강남역까지의 첫 안내문은 "남영역앞교차로에서 좌회전, 한강대로77길"이고 서울역에서 부산역까지 최소시간 경로의 신갈JC는 "신갈JC(북측)에서 오른쪽 출구, 영동고속도로 방면"이다.
 
 `warnings`는 경로 위 경고를 `Warning`의 종류, 거리, 문장으로 만든다. 종류는 과속 단속 카메라(단속구분에 속도가 포함된 카메라, 제한속도가 있으면 "제한속도 50"을 붙인다), 단속 카메라, 과속방지턱, 사고다발 구간(유형, 길이, 사고 건수 합), 요금소, 높이 제한, 하중 제한이다. 카메라·방지턱·사고다발 구간은 출발점부터의 거리 순서로 정렬하고 사고다발 구간은 끝 거리 `to_m`도 가지며, 경로 전체에 해당하는 높이·하중 제한은 거리 없이 맨 앞에 넣고 요금소는 수만 세어 맨 뒤에 넣는다. 서울역에서 강남역까지는 경고 43건으로 높이 제한 3.8m가 맨 앞이고 첫 거리 경고는 538m의 과속방지턱이며, 안내문과 경고를 더한 응답은 29,622바이트이다. 서울역에서 부산역까지 최소시간 경로는 경고 89건이고 맨 뒤가 요금소 4곳이다.
+
+## 실시간 가중치 갱신
+
+소통정보와 돌발정보를 ETA에 반영하기 위해 `RouteDb::update_weights`를 추가하였다. `WeightUpdate`는 LINK_ID, 속도 배율, 돌발 배율이며 링크의 시간 배율은 두 배율의 곱이고 전면 통제는 돌발 배율 무한대이다. `ProfileInput`에 간선별 시간 배율 `factor`를 더해 통행 시간에 링크마다 배율을 곱하고 배율이 무한대인 링크를 지나는 통행은 `INF_WEIGHT`로 막으며, 거리 가중치에는 배율이 없다. `RouteDb`는 간선마다 배율 `factors`(기본 1.0), LINK_ID에서 간선 번호를 찾는 `HashMap`, customize용 CCH 구조를 갖고 있는데 mmap으로 연 `CchBundle`은 탐색용 view만 주고 customize는 `cch::Cch`가 필요하므로 `Cch::load_struct`로 구조 파일을 메모리에 한 번 더 읽는다.
+
+metric은 `Metrics`가 프로파일 3개의 `Arc<MetricSource>`로 갖고 있으며 `MetricSource`는 파일을 mmap으로 연 `MetricBundle`이거나 customize한 `cch::Metric`이다. `RouteDb`는 `RwLock<Arc<Metrics>>`로 현재 묶음을 갖고 있고 요청은 `metrics()`로 `Arc`를 복제하여 `router(&cch_view, &metrics)`를 만들므로 탐색 중에 갱신이 있어도 그 요청은 이전 묶음으로 끝난다. `update_weights`는 배율을 바꾼 뒤 최소시간과 무료도로 가중치를 다시 계산하여 새 `Metric` 두 개에 customize하고 거리 metric은 현재 것을 그대로 묶어 새 `Arc<Metrics>`로 바꾸며, 결과로 바꾼 링크 수, 그래프에 없는 LINK_ID 수, 막힌 링크 수, 걸린 시간을 반환한다. `reset_weights`는 배율을 모두 1.0으로 되돌리고 파일에서 연 정적 묶음으로 돌아간다.
+
+서울역에서 강남역까지 최소시간 경로의 가운데 링크 하나를 전면 통제하면 214ms에 갱신되고 새 경로는 그 링크를 지나지 않으며, 경로 링크 87개의 속도 배율을 2로 하면 188ms에 갱신되고 시간이 늘어나며 거리 경로는 링크 104개 그대로이다. 되돌리면 처음과 같은 링크 열과 시간이다. 갱신 시간은 통행 1,583,618개의 가중치 계산과 customize 두 번의 합이다. collector와의 연결 방식, 소통·돌발정보 변환은 다음 항목에서 정할 예정이다.
 
 ## 코드 규약
 
@@ -646,7 +654,7 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 
 ## 테스트
 
-`cargo test --workspace`로 43개를 실행한다. `geocode_api`는 `.env`의 키로 브이월드를 실제로 호출하며 키가 없으면 건너뛴다. `route_api`는 전국 그래프 파일을 열어 라우터에 요청을 보내므로 debug 빌드에서는 R-tree 생성에 129초가 소요되고 `cargo test --release -p nav-api`로는 3초이다.
+`cargo test --workspace`로 44개를 실행한다. `geocode_api`는 `.env`의 키로 브이월드를 실제로 호출하며 키가 없으면 건너뛴다. `route_api`는 전국 그래프 파일을 열어 라우터에 요청을 보내므로 debug 빌드에서는 R-tree 생성에 129초가 소요되고 `cargo test --release -p nav-api`로는 3초이다.
 
 | 파일 | 테스트 | 확인 내용 |
 |---|---|---|
@@ -676,12 +684,13 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 | `linegraph.rs` | `expand_intersection_group` | 모퉁이 4개 교차로의 그룹과 내부 링크, 우회전·직진·좌회전 통행의 비용과 경유 링크, 좌회전 금지, U턴 허용, 경유 링크를 `ST_LINK`로 둔 금지 |
 | `linegraph.rs` | `join_rule_path_over_long_link` | 30m 연결 링크가 낀 U턴이 25m 그룹으로는 걸리지 않고, 회전정보 경로로 묶으면 걸리며 금지보다 우선 |
 | `linegraph.rs` | `bridge_uturn_without_link` | 잇는 링크가 없는 011에 건너가는 통행이 생기고 비용이 8m와 진출 링크 길이의 합 |
-| `profile.rs` | `time_and_free_weights` | 링크 4개 통행 4개의 시간 가중치, 건너가는 10m의 시간, 요금소·고속국도로 들어가는 통행 3개가 `INF_WEIGHT`, 거리 가중치 cm |
+| `profile.rs` | `time_and_free_weights` | 링크 4개 통행 4개의 시간 가중치, 건너가는 10m의 시간, 배율 2인 링크를 지나는 통행의 시간 증가, 배율 무한대인 링크로 가는 통행 차단, 요금소·고속국도로 들어가는 통행 3개가 `INF_WEIGHT`, 거리 가중치 cm |
 | `nav/api` `service.rs` | `lat_lon_out_of_range_is_rejected` | 위도 91, 경도 -181은 400 |
 | `nav/api` `route/guidance.rs` | `intersection_names`, `step_texts` | 남영역앞교차로·신갈JC(북측)·반포IC는 교차로 이름이고 하월곡동 26-14·야당동1040은 지번, 좌회전·1시 방향·오른쪽 출구 방면·유턴 문장 |
 | `nav/api` `accident/index.rs` | `sections_along_route`, `parse_ring_rejects_bad_text` | 겹치는 정사각형 두 개가 한 구간이고 경계에 닿는 선분까지 0~500m, 떨어진 정사각형은 600~1,000m, 밖을 지나면 없음, 점 3개 미만과 숫자 아닌 좌표는 에러 |
 | `nav/api` `geocode/service.rs` | `parse_place_and_not_found` | 브이월드 PLACE 응답의 서울역 한 건 변환과 좌표 없는 건 제외, NOT_FOUND는 빈 목록, ERROR는 502 |
 | `nav/api` `tests/geocode_api.rs` | `geocode_requests` | 서울역 장소 검색의 첫 결과와 좌표 범위, 한강대로 405 주소 검색, 없는 장소는 빈 목록, 빈 검색어는 400 |
+| `nav/api` `tests/route_api.rs` | `weight_updates_change_route` | 가운데 링크 전면 통제 뒤 경로가 그 링크를 피함, 속도 배율 2 뒤 시간 증가와 거리 경로 불변, 되돌리면 처음과 같음 |
 | `nav/api` `tests/route_api.rs` | `route_requests` | 서울역→강남역 링크 104개와 첫 안내 좌회전 한강대로77길, 서울역→부산역 최소시간 영업소 4곳, 사고다발 구간이 있고 시작 거리가 끝 거리 이하, 안내문 7개와 첫 안내문 "남영역앞교차로에서 좌회전, 한강대로77길", 경고 맨 앞이 높이 제한 3.8m이고 거리 순서, 바다 출발 404 ROUTE_NOT_FOUND, 위도 91과 프로파일 fast는 400 BAD_REQUEST, 없는 주소 404 NOT_FOUND |
 | `file.rs` | `write_and_open_same_graph`, `open_other_file` | 저장 후 다시 열면 배열 35개 일치, 교차로 이름 가교차로, 가→라 링크의 높이 450cm·하중 4,500kg·트럭 금지·제한속도 30·도로등급 104·연결로, 지점 2개의 배열과 간선별 범위, 도로명 3개와 가→라 링크의 도로명 능안로, 다른 파일은 에러 |
 

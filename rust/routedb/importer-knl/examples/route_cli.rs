@@ -47,7 +47,8 @@ fn main() {
     )
     .unwrap();
     let cch_view = db.cch_view();
-    let mut router = db.router(&cch_view);
+    let metrics = db.metrics();
+    let mut router = db.router(&cch_view, &metrics);
     println!(
         "그래프와 CCH 번들 열기, R-tree 생성 {:.1}초",
         started.elapsed().as_secs_f64()

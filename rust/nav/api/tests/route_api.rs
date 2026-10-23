@@ -10,7 +10,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use nav_api::accident::index::AccidentIndex;
 use nav_api::state::AppState;
-use routedb_core::route::RouteDb;
+use routedb_core::route::{RouteDb, WeightUpdate};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -19,6 +19,11 @@ const ACCIDENT_FILE: &str =
     r"C:\Users\nocdu\Desktop\dev\route\maps\전국교통사고다발지역표준데이터\사고다발_폴리곤.csv";
 
 fn app() -> Router {
+    app_with_db().0
+}
+
+/// 라우터와 함께 `RouteDb`도 반환한다. 가중치 갱신 테스트가 사용한다
+fn app_with_db() -> (Router, Arc<RouteDb>) {
     let dir = Path::new(GRAPH_DIR);
     let db = RouteDb::open(
         &dir.join("moct.rdb"),
@@ -32,12 +37,14 @@ fn app() -> Router {
     .expect("그래프 파일을 열지 못함");
     let accidents =
         AccidentIndex::load(Path::new(ACCIDENT_FILE)).expect("사고다발 폴리곤 파일을 읽지 못함");
-    nav_api::app(AppState {
-        db: Arc::new(db),
+    let db = Arc::new(db);
+    let app = nav_api::app(AppState {
+        db: Arc::clone(&db),
         accidents: Arc::new(accidents),
         http: reqwest::Client::new(),
         vworld_key: String::new(),
-    })
+    });
+    (app, db)
 }
 
 /// 요청 하나를 보내고 (상태 코드, 본문)을 반환한다
@@ -166,4 +173,76 @@ async fn route_requests() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["code"], "NOT_FOUND");
     assert_eq!(body["message"], "없는 주소: /nothing");
+}
+
+#[tokio::test]
+async fn weight_updates_change_route() {
+    let (app, db) = app_with_db();
+    let body = json!({"from": {"lat": 37.5547, "lon": 126.9707}, "to": {"lat": 37.4979, "lon": 127.0276}, "profile": "time"});
+
+    let (_, before) = send(&app, "POST", "/route", body.clone()).await;
+    let links: Vec<u64> = before["data"]["links"]
+        .as_array()
+        .expect("links")
+        .iter()
+        .map(|l| l.as_u64().expect("LINK_ID"))
+        .collect();
+    let duration = before["data"]["duration_s"].as_f64().expect("duration_s");
+
+    // 경로 가운데 링크를 전면 통제하면 그 링크를 피해 간다
+    let blocked = links[links.len() / 2];
+    let report = db.update_weights(&[WeightUpdate {
+        link_id: blocked,
+        speed_factor: 1.0,
+        incident_factor: f32::INFINITY,
+    }]);
+    assert_eq!((report.applied, report.unknown, report.blocked), (1, 0, 1));
+    eprintln!("update_weights 전면 통제 1건 {:.0}ms", report.elapsed_ms);
+    let (status, after) = send(&app, "POST", "/route", body.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    let after_links: Vec<u64> = after["data"]["links"]
+        .as_array()
+        .expect("links")
+        .iter()
+        .map(|l| l.as_u64().expect("LINK_ID"))
+        .collect();
+    assert!(!after_links.contains(&blocked));
+    assert_ne!(after_links, links);
+
+    // 통제를 풀고 모든 경로 링크의 속도 배율을 2로 하면 시간이 늘어난다. 거리 프로파일은 그대로이다
+    db.reset_weights();
+    let updates: Vec<WeightUpdate> = links
+        .iter()
+        .map(|&link_id| WeightUpdate {
+            link_id,
+            speed_factor: 2.0,
+            incident_factor: 1.0,
+        })
+        .collect();
+    let report = db.update_weights(&updates);
+    assert_eq!((report.applied, report.blocked), (links.len(), 0));
+    eprintln!(
+        "update_weights 속도 배율 {}건 {:.0}ms",
+        links.len(),
+        report.elapsed_ms
+    );
+    let (_, slow) = send(&app, "POST", "/route", body.clone()).await;
+    assert!(slow["data"]["duration_s"].as_f64().expect("duration_s") > duration);
+    let (_, distance) = send(
+        &app,
+        "POST",
+        "/route",
+        json!({"from": {"lat": 37.5547, "lon": 126.9707}, "to": {"lat": 37.4979, "lon": 127.0276}}),
+    )
+    .await;
+    assert_eq!(
+        distance["data"]["links"].as_array().map(Vec::len),
+        Some(104)
+    );
+
+    // 되돌리면 처음 경로와 같다
+    db.reset_weights();
+    let (_, restored) = send(&app, "POST", "/route", body).await;
+    assert_eq!(restored["data"]["links"], before["data"]["links"]);
+    assert_eq!(restored["data"]["duration_s"].as_f64(), Some(duration));
 }

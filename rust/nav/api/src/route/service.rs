@@ -22,7 +22,8 @@ pub async fn find_route(
     let (route, elapsed_ms) = tokio::task::spawn_blocking(move || {
         let started = Instant::now();
         let cch_view = db.cch_view();
-        let mut router = db.router(&cch_view);
+        let metrics = db.metrics();
+        let mut router = db.router(&cch_view, &metrics);
         let route = router.route(
             (input.from.lat, input.from.lon),
             (input.to.lat, input.to.lon),

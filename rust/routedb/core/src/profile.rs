@@ -3,6 +3,7 @@
 /// - 거리: 통행 비용(m)을 cm로 반올림한다.
 /// - 최소시간: 링크 길이를 제한속도 MAX_SPD로 나눈 통행 시간(ms)의 합이다. 건너가는 통행의 거리는 다음 링크 속도로 계산한다.
 /// - 무료도로: 최소시간에서 고속국도 링크와 요금소 링크로 들어가는 통행을 INF_WEIGHT로 막는다.
+/// - 시간 배율 factor가 있으면 링크 시간에 곱한다. 배율이 무한대인 링크를 지나는 통행은 INF_WEIGHT이다.
 pub struct ProfileInput<'a> {
     pub turn_first_out: &'a [u32],
     pub turn_head: &'a [u32],
@@ -18,6 +19,8 @@ pub struct ProfileInput<'a> {
     pub toll_unit: &'a [u32],
     /// 링크 도로등급
     pub road_rank: &'a [u8],
+    /// 링크별 시간 배율. 없으면 1.0
+    pub factor: Option<&'a [f32]>,
 }
 
 /// 고속국도 도로등급
@@ -59,19 +62,37 @@ impl ProfileInput<'_> {
         out
     }
 
-    /// 통행 t의 시간(ms). 경유 링크와 다음 링크의 시간 합에 건너가는 거리의 시간을 더한다.
-    fn turn_time_ms(&self, seq: &[u32], t: usize) -> f64 {
+    /// 링크 e의 시간 배율
+    fn factor_of(&self, e: usize) -> f64 {
+        self.factor.map_or(1.0, |f| f[e] as f64)
+    }
+
+    /// 통행 t의 시간(ms). 경유 링크와 다음 링크의 시간 합에 건너가는 거리의 시간을 더하고 링크마다 시간 배율을 곱한다.
+    /// 배율이 무한대인 링크가 있으면 None이다
+    fn turn_time_ms(&self, seq: &[u32], t: usize) -> Option<f64> {
         let gap = self.turn_weight[t] - seq.iter().map(|&e| self.length[e as usize]).sum::<f64>();
         let head = *seq.last().unwrap() as usize;
-        seq.iter()
-            .map(|&e| link_time_ms(self.length, self.max_spd, e as usize))
-            .sum::<f64>()
-            + gap / (self.max_spd[head] as f64 / 3.6) * 1000.0
+        let mut total = gap / (self.max_spd[head] as f64 / 3.6) * 1000.0 * self.factor_of(head);
+        for &e in seq {
+            let factor = self.factor_of(e as usize);
+            if factor.is_infinite() {
+                return None;
+            }
+            total += link_time_ms(self.length, self.max_spd, e as usize) * factor;
+        }
+        Some(total)
+    }
+
+    /// 통행 t의 가중치(ms). 막힌 통행은 INF_WEIGHT
+    fn turn_weight_ms(&self, seq: &[u32], t: usize) -> u32 {
+        self.turn_time_ms(seq, t).map_or(cch::INF_WEIGHT, |ms| {
+            (ms.round() as u32).min(cch::INF_WEIGHT - 1)
+        })
     }
 
     /// 최소시간 가중치(ms)
     pub fn time_weights(&self) -> Vec<u32> {
-        self.map_turns(|_, seq, t| self.turn_time_ms(seq, t).round() as u32)
+        self.map_turns(|_, seq, t| self.turn_weight_ms(seq, t))
     }
 
     /// 무료도로 가중치(ms). 고속국도 링크나 요금소 링크로 들어가는 통행은 INF_WEIGHT이다.
@@ -83,7 +104,7 @@ impl ProfileInput<'_> {
             {
                 cch::INF_WEIGHT
             } else {
-                self.turn_time_ms(seq, t).round() as u32
+                self.turn_weight_ms(seq, t)
             }
         })
     }
@@ -135,9 +156,30 @@ mod tests {
             toll_first: &d.7,
             toll_unit: &d.8,
             road_rank: &d.9,
+            factor: None,
         };
         // 링크 1은 50m를 30km/h로 6,000ms, 링크 2·3은 100m를 60km/h로 6,000ms, 건너가는 10m는 60km/h로 600ms
         assert_eq!(input.time_weights(), [6_000, 12_600, 6_000, 6_000]);
+        // 링크 1의 배율이 2이면 링크 1을 지나는 통행 0→1과 0→2가 6,000ms 늘고, 링크 2가 무한대이면 링크 2로 가는 통행이 막힌다
+        let factor = [1.0f32, 2.0, 1.0, 1.0];
+        let slow = ProfileInput {
+            factor: Some(&factor),
+            ..input
+        };
+        assert_eq!(slow.time_weights(), [12_000, 18_600, 6_000, 6_000]);
+        let factor = [1.0f32, 1.0, f32::INFINITY, 1.0];
+        let blocked = ProfileInput {
+            factor: Some(&factor),
+            ..input
+        };
+        assert_eq!(
+            blocked.time_weights(),
+            [6_000, cch::INF_WEIGHT, 6_000, cch::INF_WEIGHT]
+        );
+        let input = ProfileInput {
+            factor: None,
+            ..input
+        };
         // 통행 순서는 0→1, 0→2, 0→3, 1→2이다. 0→1은 요금소 링크로, 0→2는 요금소 링크를 경유해 고속국도로, 1→2는 고속국도로 들어가므로 막히고 0→3만 남는다
         assert_eq!(
             input.free_weights(),

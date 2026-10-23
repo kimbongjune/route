@@ -515,6 +515,7 @@ fn main() {
         toll_first: file.toll_first(),
         toll_unit: file.toll_unit(),
         road_rank: file.road_rank(),
+        factor: None,
     };
     for (name, weights, location) in [
         ("최소시간", profile.time_weights(), CCH_METRIC_TIME_LOCATION),

@@ -1,13 +1,17 @@
+use std::collections::HashMap;
 use std::io;
 use std::path::Path;
+use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
 use cch::bundle::{CchBundle, CchView, MetricBundle, MetricView};
 use cch::path::PathQuery;
+use cch::{Cch, Metric};
 
 use crate::file::GraphFile;
 use crate::hierarchy;
 use crate::linegraph;
-use crate::profile;
+use crate::profile::{self, ProfileInput};
 use crate::snap::{LinkIndex, Snap};
 use serde::{Deserialize, Serialize};
 
@@ -353,19 +357,75 @@ pub struct Route {
 }
 
 /// 그래프 파일, 링크 R-tree, CCH 구조, 프로파일별 metric
+/// 프로파일 하나의 metric. 파일을 mmap으로 연 것이거나 customize하여 메모리에 만든 것이다
+pub enum MetricSource {
+    File(MetricBundle),
+    Memory(Metric),
+}
+
+impl MetricSource {
+    pub fn view(&self) -> MetricView<'_> {
+        match self {
+            MetricSource::File(bundle) => bundle.view(),
+            MetricSource::Memory(metric) => metric.view(),
+        }
+    }
+}
+
+/// 프로파일 3개의 metric 묶음. `RouteDb`가 `Arc`로 갖고 있다가 가중치를 갱신하면 새 묶음으로 바꾼다
+pub struct Metrics {
+    sources: [Arc<MetricSource>; 3],
+}
+
+impl Metrics {
+    pub fn view(&self, profile: Profile) -> MetricView<'_> {
+        self.sources[profile as usize].view()
+    }
+}
+
+/// 링크 하나의 실시간 배율. 통행 시간에 속도 배율과 돌발 배율을 곱한다. 전면 통제는 돌발 배율 무한대이다
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WeightUpdate {
+    pub link_id: u64,
+    pub speed_factor: f32,
+    pub incident_factor: f32,
+}
+
+/// `update_weights` 결과
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UpdateReport {
+    /// 배율을 바꾼 링크 수
+    pub applied: usize,
+    /// 그래프에 없는 LINK_ID 수
+    pub unknown: usize,
+    /// 배율이 무한대라 막힌 링크 수
+    pub blocked: usize,
+    /// 가중치 계산과 customize에 걸린 시간(ms)
+    pub elapsed_ms: f64,
+}
+
 pub struct RouteDb {
     pub file: GraphFile,
     pub index: LinkIndex,
     /// 간선마다 출발 교차로 번호
     pub tail: Vec<u32>,
     cch: CchBundle,
-    metrics: [MetricBundle; 3],
+    /// customize용 CCH 구조. 파일을 메모리로 읽은 것이다
+    structure: Cch,
+    /// 현재 metric 묶음. 갱신하면 `Arc`를 통째로 바꾼다
+    metrics: RwLock<Arc<Metrics>>,
+    /// 파일에서 연 정적 metric 묶음. 배율을 되돌릴 때 사용한다
+    base_metrics: Arc<Metrics>,
+    /// 간선마다 실시간 시간 배율. 기본 1.0
+    factors: RwLock<Vec<f32>>,
+    /// LINK_ID에서 간선 번호
+    edge_of_link: HashMap<u64, u32>,
 }
 
 /// 경로 탐색기. CCH 쿼리 버퍼를 갖고 있어 여러 경로에 재사용한다.
 pub struct Router<'a> {
     db: &'a RouteDb,
-    metrics: [MetricView<'a>; 3],
+    metrics: &'a Metrics,
     query: PathQuery<'a>,
 }
 
@@ -424,17 +484,31 @@ impl RouteDb {
         let index = LinkIndex::build(file.geom_first(), file.geom_lat(), file.geom_lon());
         let tail = linegraph::tails(file.first_out());
         let cch = CchBundle::open(cch_struct)?;
-        let metrics = [
-            MetricBundle::open(metrics[0])?,
-            MetricBundle::open(metrics[1])?,
-            MetricBundle::open(metrics[2])?,
-        ];
+        let structure = Cch::load_struct(cch_struct)?;
+        let base_metrics = Arc::new(Metrics {
+            sources: [
+                Arc::new(MetricSource::File(MetricBundle::open(metrics[0])?)),
+                Arc::new(MetricSource::File(MetricBundle::open(metrics[1])?)),
+                Arc::new(MetricSource::File(MetricBundle::open(metrics[2])?)),
+            ],
+        });
+        let edge_of_link = file
+            .link_id()
+            .iter()
+            .enumerate()
+            .map(|(e, &id)| (id, e as u32))
+            .collect();
+        let factors = vec![1.0f32; file.edge_count()];
         Ok(Self {
             file,
             index,
             tail,
             cch,
-            metrics,
+            structure,
+            metrics: RwLock::new(Arc::clone(&base_metrics)),
+            base_metrics,
+            factors: RwLock::new(factors),
+            edge_of_link,
         })
     }
 
@@ -465,15 +539,89 @@ impl RouteDb {
     }
 
     /// 경로 탐색기를 만든다. 쿼리 버퍼를 교차로 수만큼 할당하므로 한 번 만들어 재사용한다.
-    pub fn router<'a>(&'a self, cch_view: &'a CchView<'a>) -> Router<'a> {
+    /// 현재 metric 묶음. 요청이 끝날 때까지 `Arc`를 갖고 있으면 그 사이 갱신이 있어도 같은 묶음으로 탐색한다
+    pub fn metrics(&self) -> Arc<Metrics> {
+        Arc::clone(&self.metrics.read().expect("metrics 잠금 실패"))
+    }
+
+    /// 간선마다 현재 실시간 시간 배율
+    pub fn factors(&self) -> Vec<f32> {
+        self.factors.read().expect("factors 잠금 실패").clone()
+    }
+
+    pub fn router<'a>(&'a self, cch_view: &'a CchView<'a>, metrics: &'a Metrics) -> Router<'a> {
         Router {
             db: self,
-            metrics: [
-                self.metrics[0].view(),
-                self.metrics[1].view(),
-                self.metrics[2].view(),
-            ],
+            metrics,
             query: PathQuery::new(cch_view),
+        }
+    }
+
+    /// 링크별 실시간 배율을 반영한다. 배율을 바꾼 뒤 최소시간과 무료도로 가중치를 다시 계산하여 새 버퍼에 customize하고
+    /// metric 묶음의 `Arc`를 바꾼다. 거리 metric은 그대로이다. 진행 중인 탐색은 이전 묶음으로 끝난다
+    pub fn update_weights(&self, updates: &[WeightUpdate]) -> UpdateReport {
+        let started = Instant::now();
+        let (applied, unknown, blocked, factors) = {
+            let mut factors = self.factors.write().expect("factors 잠금 실패");
+            let (mut applied, mut unknown) = (0, 0);
+            for update in updates {
+                match self.edge_of_link.get(&update.link_id) {
+                    Some(&e) => {
+                        factors[e as usize] = update.speed_factor * update.incident_factor;
+                        applied += 1;
+                    }
+                    None => unknown += 1,
+                }
+            }
+            let blocked = factors.iter().filter(|f| f.is_infinite()).count();
+            (applied, unknown, blocked, factors.clone())
+        };
+        let new_metrics = self.customized_metrics(&factors);
+        *self.metrics.write().expect("metrics 잠금 실패") = Arc::new(new_metrics);
+        UpdateReport {
+            applied,
+            unknown,
+            blocked,
+            elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+        }
+    }
+
+    /// 실시간 배율을 모두 1.0으로 되돌리고 파일에서 연 정적 metric으로 돌아간다
+    pub fn reset_weights(&self) {
+        self.factors
+            .write()
+            .expect("factors 잠금 실패")
+            .iter_mut()
+            .for_each(|f| *f = 1.0);
+        *self.metrics.write().expect("metrics 잠금 실패") = Arc::clone(&self.base_metrics);
+    }
+
+    /// 배율을 반영한 최소시간·무료도로 가중치로 customize한 metric 묶음. 거리 metric은 현재 것을 그대로 쓴다
+    fn customized_metrics(&self, factors: &[f32]) -> Metrics {
+        let file = &self.file;
+        let input = ProfileInput {
+            turn_first_out: file.turn_first_out(),
+            turn_head: file.turn_head(),
+            turn_weight: file.turn_weight(),
+            via_first: file.via_first(),
+            via: file.via(),
+            length: file.length(),
+            max_spd: file.max_spd(),
+            toll_first: file.toll_first(),
+            toll_unit: file.toll_unit(),
+            road_rank: file.road_rank(),
+            factor: Some(factors),
+        };
+        let customizer = self.structure.customizer();
+        let time = customizer.customize(&input.time_weights());
+        let free = customizer.customize(&input.free_weights());
+        let distance = Arc::clone(&self.metrics.read().expect("metrics 잠금 실패").sources[0]);
+        Metrics {
+            sources: [
+                distance,
+                Arc::new(MetricSource::Memory(time)),
+                Arc::new(MetricSource::Memory(free)),
+            ],
         }
     }
 }
@@ -489,7 +637,7 @@ impl Router<'_> {
             file.turn_weight(),
             file.length(),
         );
-        let metric_view = &self.metrics[profile as usize];
+        let metric_view = &self.metrics.view(profile);
         let query = &mut self.query;
         let froms = db.index.nearest_n(from.0, from.1, 5);
         let tos = db.index.nearest_n(to.0, to.1, 5);
