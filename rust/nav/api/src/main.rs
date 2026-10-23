@@ -3,14 +3,19 @@
 //! cargo run --release -p nav-api -- [그래프 폴더] [주소] [사고다발 폴리곤 CSV]
 //! 그래프 폴더는 moct.rdb, moct.cch-struct, moct.cch-metric, moct.cch-metric-time, moct.cch-metric-free가 있는 폴더이다.
 //! 브이월드 인증키는 환경 변수 VWORLD_API_KEY 또는 저장소 루트 .env의 VWORLD_API_KEY에서 읽는다.
+//! 국가교통정보센터 인증키 ITS_API_KEY와 폴링 간격 TRAFFIC_POLL_SECS가 모두 있을 때만 소통정보 폴링 태스크를 실행하고,
+//! INCIDENT_POLL_SECS가 있을 때만 돌발정보 폴링 태스크를 실행한다.
+//! 인증키의 월 호출 한도가 1,000건이라 폴링 한 번(타일 16번)마다 한도를 쓰므로 기본으로는 폴링하지 않는다.
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use nav_api::accident::index::AccidentIndex;
+use nav_api::collector;
 use nav_api::state::AppState;
 use routedb_core::route::RouteDb;
+use tokio::sync::broadcast;
 
 const DEFAULT_GRAPH_DIR: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb";
 const DEFAULT_ADDR: &str = "127.0.0.1:3000";
@@ -71,11 +76,45 @@ async fn main() {
         started.elapsed().as_secs_f64()
     );
 
+    let db = Arc::new(db);
+    let http = reqwest::Client::new();
+    let (events, _) = broadcast::channel(64);
+    let updates = collector::start(Arc::clone(&db), events.clone());
+    let poll_secs: Option<u64> = env_value("TRAFFIC_POLL_SECS").and_then(|v| v.parse().ok());
+    match (env_value("ITS_API_KEY"), poll_secs) {
+        (Some(its_key), Some(secs)) => {
+            println!("소통정보 폴링 {secs}초 간격");
+            tokio::spawn(collector::traffic::run(
+                http.clone(),
+                its_key,
+                Arc::clone(&db),
+                updates.clone(),
+                Duration::from_secs(secs),
+            ));
+        }
+        _ => println!("ITS_API_KEY 또는 TRAFFIC_POLL_SECS가 없어 소통정보 폴링을 하지 않음"),
+    }
+    let incident_secs: Option<u64> = env_value("INCIDENT_POLL_SECS").and_then(|v| v.parse().ok());
+    match (env_value("ITS_API_KEY"), incident_secs) {
+        (Some(its_key), Some(secs)) => {
+            println!("돌발정보 폴링 {secs}초 간격");
+            tokio::spawn(collector::incident::run(
+                http.clone(),
+                its_key,
+                Arc::clone(&db),
+                updates.clone(),
+                Duration::from_secs(secs),
+            ));
+        }
+        _ => println!("ITS_API_KEY 또는 INCIDENT_POLL_SECS가 없어 돌발정보 폴링을 하지 않음"),
+    }
     let app = nav_api::app(AppState {
-        db: Arc::new(db),
+        db,
         accidents: Arc::new(accidents),
-        http: reqwest::Client::new(),
+        http,
         vworld_key,
+        updates,
+        events,
     });
     let listener = tokio::net::TcpListener::bind(addr)
         .await

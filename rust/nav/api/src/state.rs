@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use routedb_core::route::RouteDb;
+use tokio::sync::broadcast;
 
 use crate::accident::index::AccidentIndex;
+use crate::collector::{UpdateSender, WeightEvent};
 
-/// 앱 전체에서 공유하는 상태. `RouteDb`와 `AccidentIndex`는 `Arc`, `reqwest::Client`는 내부가 `Arc`라 Clone이 가볍다
+/// 앱 전체에서 공유하는 상태. `RouteDb`와 `AccidentIndex`는 `Arc`, `reqwest::Client`와 채널은 내부가 `Arc`라 Clone이 가볍다
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<RouteDb>,
@@ -14,4 +16,8 @@ pub struct AppState {
     pub http: reqwest::Client,
     /// 브이월드 인증키
     pub vworld_key: String,
+    /// 배율 묶음을 적용 태스크로 보내는 채널
+    pub updates: UpdateSender,
+    /// 가중치 갱신 이벤트. `GET /events`가 구독한다
+    pub events: broadcast::Sender<WeightEvent>,
 }

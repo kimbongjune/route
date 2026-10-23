@@ -46,6 +46,10 @@ rust/
     geocode/model.rs        검색 요청·응답 타입
     geocode/handler.rs      검색어를 받아 service 호출
     geocode/service.rs      브이월드 검색 API 호출과 응답 변환
+    collector/mod.rs        배율 묶음을 받아 update_weights를 호출하는 적용 태스크, SSE 이벤트 타입
+    collector/handler.rs    GET /events SSE
+    collector/traffic.rs    교통소통정보 타일 폴링, 속도 배율 변환
+    collector/incident.rs   돌발상황정보 폴링, 전면·부분 통제 배율 변환
     accident/model.rs       사고다발지역과 경로 위 구간 타입
     accident/index.rs       사고다발 폴리곤 R-tree, 경로 좌표 열과의 교차
   nav/api/tests/
@@ -66,6 +70,7 @@ rust/
 | `csv` 1.4 | 사고다발_폴리곤.csv 읽기 | serde로 행을 구조체에 바로 넣는다 |
 | `geo` 0.33 | 선분과 폴리곤의 교차 판정 | `Line`이 `Polygon`과 교차하는지 `Intersects`로 확인하며 경계에 닿는 것도 교차로 본다 |
 | `reqwest` 0.13 | 브이월드 검색 API 호출 | tokio 위에서 동작하는 HTTP 클라이언트이며 `query` feature로 파라미터를 URL 인코딩하고 `json` feature로 응답을 `serde_json::Value`로 받는다 |
+| `tokio-stream` 0.1 | SSE 스트림 | broadcast 수신자를 `Stream`으로 감싸 axum `Sse`에 넘긴다 |
 | `axum` 0.8, `tokio` 1.54 | 내비 API 서버 | tokio 위에서 동작하는 HTTP 프레임워크이며 핸들러 인자로 상태와 JSON 본문을 받고 `Arc` 상태 공유가 `with_state` 하나로 된다 |
 | `cch` 0.3 | Customizable Contraction Hierarchies | 순수 Rust로 RoutingKit을 옮긴 구현이며 CSR 입력, 방향별 가중치, rayon 병렬 customize, mmap 번들 저장을 갖추었다 |
 
@@ -535,11 +540,43 @@ CCH 구조는 세 프로파일이 같고 metric만 다르므로 임포터가 거
 
 ## 실시간 가중치 갱신
 
-소통정보와 돌발정보를 ETA에 반영하기 위해 `RouteDb::update_weights`를 추가하였다. `WeightUpdate`는 LINK_ID, 속도 배율, 돌발 배율이며 링크의 시간 배율은 두 배율의 곱이고 전면 통제는 돌발 배율 무한대이다. `ProfileInput`에 간선별 시간 배율 `factor`를 더해 통행 시간에 링크마다 배율을 곱하고 배율이 무한대인 링크를 지나는 통행은 `INF_WEIGHT`로 막으며, 거리 가중치에는 배율이 없다. `RouteDb`는 간선마다 배율 `factors`(기본 1.0), LINK_ID에서 간선 번호를 찾는 `HashMap`, customize용 CCH 구조를 갖고 있는데 mmap으로 연 `CchBundle`은 탐색용 view만 주고 customize는 `cch::Cch`가 필요하므로 `Cch::load_struct`로 구조 파일을 메모리에 한 번 더 읽는다.
+소통정보와 돌발정보를 ETA에 반영하기 위해 `RouteDb::update_weights`를 추가하였다. `WeightUpdate`는 LINK_ID, 속도 배율, 돌발 배율이며 링크의 시간 배율은 두 배율의 곱이고 전면 통제는 돌발 배율 무한대이다. 두 배율은 `Option`이라 없는 쪽은 이전 값을 유지하므로 소통정보와 돌발정보를 따로 반영할 수 있고 `RouteDb`는 속도 배율과 돌발 배율을 간선마다 따로 갖고 있다. `ProfileInput`에 간선별 시간 배율 `factor`를 더해 통행 시간에 링크마다 배율을 곱하고 배율이 무한대인 링크를 지나는 통행은 `INF_WEIGHT`로 막으며, 거리 가중치에는 배율이 없다. `RouteDb`는 간선마다 배율 `factors`(기본 1.0), LINK_ID에서 간선 번호를 찾는 `HashMap`, customize용 CCH 구조를 갖고 있는데 mmap으로 연 `CchBundle`은 탐색용 view만 주고 customize는 `cch::Cch`가 필요하므로 `Cch::load_struct`로 구조 파일을 메모리에 한 번 더 읽는다.
 
 metric은 `Metrics`가 프로파일 3개의 `Arc<MetricSource>`로 갖고 있으며 `MetricSource`는 파일을 mmap으로 연 `MetricBundle`이거나 customize한 `cch::Metric`이다. `RouteDb`는 `RwLock<Arc<Metrics>>`로 현재 묶음을 갖고 있고 요청은 `metrics()`로 `Arc`를 복제하여 `router(&cch_view, &metrics)`를 만들므로 탐색 중에 갱신이 있어도 그 요청은 이전 묶음으로 끝난다. `update_weights`는 배율을 바꾼 뒤 최소시간과 무료도로 가중치를 다시 계산하여 새 `Metric` 두 개에 customize하고 거리 metric은 현재 것을 그대로 묶어 새 `Arc<Metrics>`로 바꾸며, 결과로 바꾼 링크 수, 그래프에 없는 LINK_ID 수, 막힌 링크 수, 걸린 시간을 반환한다. `reset_weights`는 배율을 모두 1.0으로 되돌리고 파일에서 연 정적 묶음으로 돌아간다.
 
-서울역에서 강남역까지 최소시간 경로의 가운데 링크 하나를 전면 통제하면 214ms에 갱신되고 새 경로는 그 링크를 지나지 않으며, 경로 링크 87개의 속도 배율을 2로 하면 188ms에 갱신되고 시간이 늘어나며 거리 경로는 링크 104개 그대로이다. 되돌리면 처음과 같은 링크 열과 시간이다. 갱신 시간은 통행 1,583,618개의 가중치 계산과 customize 두 번의 합이다. collector와의 연결 방식, 소통·돌발정보 변환은 다음 항목에서 정할 예정이다.
+서울역에서 강남역까지 최소시간 경로의 가운데 링크 하나를 전면 통제하면 214ms에 갱신되고 새 경로는 그 링크를 지나지 않으며, 경로 링크 87개의 속도 배율을 2로 하면 188ms에 갱신되고 시간이 늘어나며 거리 경로는 링크 104개 그대로이다. 되돌리면 처음과 같은 링크 열과 시간이다. 갱신 시간은 통행 1,583,618개의 가중치 계산과 customize 두 번의 합이다. 
+### 폴링 태스크와 SSE
+
+폴링을 별도 프로세스로 두지 않고 `nav-api` 안의 tokio 태스크로 실행하기로 정하였다. 프로세스가 하나라 배포와 가중치 전달이 단순하고, 서버 모드에서는 폴링 태스크가 routedb 서버에 접속하는 것으로 충분하다고 판단하였다. `collector/mod.rs`의 `start`는 적용 태스크를 시작하고 배율 묶음 `Vec<WeightUpdate>`를 보내는 mpsc 채널의 송신자를 반환하며, 폴링 태스크는 이 송신자로 묶음을 보낸다. 적용 태스크는 묶음마다 블로킹 스레드에서 `update_weights`를 호출하고 결과를 `WeightEvent`(바꾼 링크 수, 없는 LINK_ID 수, 막힌 링크 수, 걸린 시간, 순번)로 broadcast 채널에 보낸다. `GET /events`는 broadcast 수신자를 `BroadcastStream`으로 감싸 axum `Sse`로 흘려보내며 이벤트 이름은 `weights`, 데이터는 JSON이고 keep-alive를 보낸다. 브라우저는 이 이벤트를 받아 경로를 다시 요청한다. 채널 송신자와 broadcast 송신자는 `AppState`에 있어 테스트가 폴링 태스크 대신 묶음을 보낼 수 있다. 가운데 링크 하나를 전면 통제하는 묶음을 채널로 보내면 순번 1의 이벤트가 오고 다음 요청의 경로가 그 링크를 피함을 확인하였다. 
+
+### 소통정보 폴링
+
+국가교통정보센터 교통소통정보 API `/trafficInfo`는 민간 내비 3사와 도로공사·국도통합센터·경찰청의 속도를 5분 주기로 융합한 링크별 통행 속도(km/h), 통행 시간(초), 생성 일시를 표준노드링크 LINK_ID로 제공하며 `type=all`과 경위도 범위로 지자체 도로까지 받는다. 전국 범위 한 번이나 2도 타일은 180초 안에 응답이 오지 않았고 1도 타일은 110,906건 21,819,169바이트가 7.1초, 1.5도 타일은 84,720건이 7.5초에 왔으므로 `collector/traffic.rs`는 경도 125~131도, 위도 33~39도를 1.5도 타일 16개로 나누어 차례로 요청한다. 응답의 `resultCode`가 0이 아니면 그 타일은 실패로 세고 건너뛰며 그 링크들은 이전 배율을 유지한다.
+
+속도 배율은 제한속도 `MAX_SPD`를 통행 속도로 나눈 값이며 1.0 아래로는 내리지 않고 상한은 10이다. 속도가 0이거나 숫자가 아닌 행은 빼고 같은 링크가 여러 번 오면 마지막 값이며, 배율 묶음은 속도 배율만 있고 돌발 배율은 `None`이라 돌발정보가 넣은 값을 지우지 않는다. 인증키의 월 호출 한도가 API마다 1,000건이었고 타일 16번인 폴링 한 번이 그 1.6%이므로 `main.rs`는 `.env`에 `ITS_API_KEY`와 폴링 간격 `TRAFFIC_POLL_SECS`가 모두 있을 때만 폴링 태스크를 실행하고 기본으로는 폴링하지 않는다. 5분 간격 운영은 한 달 약 138,000건이라 2026-10-24에 한도를 200,000건으로 올려 신청하였으며, 한도를 바꾸면 키가 승인 대기로 돌아가 승인될 때까지 소통정보와 돌발정보 모두 4005를 반환한다. 인증키는 계정당 하나이다.
+
+| 항목 | 값 |
+|---|---|
+| 타일 16개 수신 | 50.1초, 실패 0 |
+| 받은 링크 | 383,299 |
+| 속도 0이거나 숫자가 아님 | 9 |
+| 그래프에 없는 LINK_ID | 16,790 |
+| 만든 속도 배율 | 365,300 |
+| `update_weights` | 246ms |
+| 서울역 → 강남역 최소시간 | 734초에서 751초, 링크 87개 그대로 |
+| 서울역 → 부산역 최소시간 | 240분 그대로, 링크 901개에서 894개 |
+
+2026-10-24 00:40의 소통정보이며 `GET /events`로 `{"applied":365300,"unknown":0,"blocked":0,"elapsed_ms":246.6,"sequence":1}` 이벤트가 왔다. 그래프에 없는 LINK_ID 16,790개는 임포터에서 제외한 `ROAD_USE=1` 링크와 2026-10-14 노드링크에 새로 생긴 링크이다.
+
+### 돌발정보 폴링
+
+돌발상황정보 API `/eventInfo`는 `type=all`, `eventType=all`로 전국 공사·사고·기상·재난 이벤트를 한 번에 주며 이벤트마다 이벤트유형, 이벤트세부유형 코드, 발생·종료 일시, 좌표, LINK_ID, 차단 통제 유형, 차단 차로, 돌발 내용이 있다. `collector/incident.rs`는 이벤트세부유형이 23 전면차단, 26 도로진입제한, 31 전면차단이거나 차단 통제 유형에 "전면"이 있으면 전면 통제로 보아 돌발 배율을 무한대로, 30 차로차단이거나 차단 통제 유형에 "부분"이 있거나 차단 차로가 있으면 부분 통제로 보아 `PARTIAL_BLOCK_FACTOR` 2.0으로 정하고, 그 밖의 이벤트는 배율을 바꾸지 않는다. 같은 링크에 이벤트가 여러 개면 가장 센 통제이며 LINK_ID가 없는 이벤트는 뺀다. 폴링은 이전에 통제했던 링크 집합을 갖고 있다가 이번 응답에 없는 링크는 배율 1.0으로 되돌리고, 호출이 실패하면 이전 배율을 그대로 유지한다. 배율 묶음은 돌발 배율만 있고 속도 배율은 `None`이라 소통정보가 넣은 값을 지우지 않는다. `main.rs`는 `ITS_API_KEY`와 `INCIDENT_POLL_SECS`가 모두 있을 때만 폴링 태스크를 실행한다.
+
+2026-10-24에 한도 변경으로 키가 승인 대기가 되어 `/eventInfo`가 4005 "인증키가 승인되지 않은 상태입니다"를 반환하므로 실제 데이터로는 확인하지 못하였고, 변환은 기술기준 문서의 샘플과 코드표로 테스트하였다. 승인 뒤 실제 이벤트로 ETA 반영을 확인할 예정이다.
+
+### 폴링 실패와 오래된 배율
+
+폴링이 실패하면 그 회차의 링크는 이전 배율을 유지한다. 소통정보는 실패한 타일만 건너뛰고 돌발정보는 호출이 실패하면 아무것도 보내지 않는다. 다만 실패가 이어지면 오래된 배율로 계속 탐색하게 되므로 `collector/mod.rs`의 `Freshness`가 마지막 성공 시각을 갖고 있다가 실패 시점이 마지막 성공에서 폴링 간격의 `STALE_POLLS` 3배 이상 지났으면 되돌리기를 한 번 보내고, 다음 성공 전까지는 다시 보내지 않는다. 되돌리기는 적용 태스크에 `Batch::Reset(종류)`로 보내며 `RouteDb::reset_factors`가 그 종류의 배율만 1.0으로 하고 다시 customize하므로 소통정보가 오래되어도 돌발 배율은 남고 그 반대도 같다. 소통정보는 타일 16개가 모두 실패한 폴링을 실패로 세고, 돌발정보는 되돌릴 때 통제 링크 집합도 비운다. 되돌린 갱신의 SSE 이벤트는 `reset`이 true이다. 전면 통제 묶음을 보낸 뒤 돌발 배율 되돌리기를 보내면 순번 2의 `reset` 이벤트가 오고 경로가 처음으로 돌아옴을 확인하였다.
 
 ## 코드 규약
 
@@ -654,7 +691,7 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 
 ## 테스트
 
-`cargo test --workspace`로 44개를 실행한다. `geocode_api`는 `.env`의 키로 브이월드를 실제로 호출하며 키가 없으면 건너뛴다. `route_api`는 전국 그래프 파일을 열어 라우터에 요청을 보내므로 debug 빌드에서는 R-tree 생성에 129초가 소요되고 `cargo test --release -p nav-api`로는 3초이다.
+`cargo test --workspace`로 50개를 실행한다. `geocode_api`는 `.env`의 키로 브이월드를 실제로 호출하며 키가 없으면 건너뛴다. `route_api`는 전국 그래프 파일을 열어 라우터에 요청을 보내므로 debug 빌드에서는 R-tree 생성에 129초가 소요되고 `cargo test --release -p nav-api`로는 3초이다.
 
 | 파일 | 테스트 | 확인 내용 |
 |---|---|---|
@@ -686,10 +723,14 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 | `linegraph.rs` | `bridge_uturn_without_link` | 잇는 링크가 없는 011에 건너가는 통행이 생기고 비용이 8m와 진출 링크 길이의 합 |
 | `profile.rs` | `time_and_free_weights` | 링크 4개 통행 4개의 시간 가중치, 건너가는 10m의 시간, 배율 2인 링크를 지나는 통행의 시간 증가, 배율 무한대인 링크로 가는 통행 차단, 요금소·고속국도로 들어가는 통행 3개가 `INF_WEIGHT`, 거리 가중치 cm |
 | `nav/api` `service.rs` | `lat_lon_out_of_range_is_rejected` | 위도 91, 경도 -181은 400 |
+| `nav/api` `collector/mod.rs` | `stale_after_three_missed_polls` | 실패 두 번까지는 유지, 세 번째 간격부터 한 번만 되돌림, 성공하면 처음부터 다시 셈 |
+| `nav/api` `collector/incident.rs` | `block_levels`, `parse_items_and_errors` | 세부유형 23·26·31과 "전면" 문구는 전면 통제, 30과 "부분"·차단 차로는 부분 통제, 고장 01은 통제 없음, 기술기준 샘플 한 건 해석, 4005는 에러, 빈 본문은 빈 목록 |
+| `nav/api` `collector/traffic.rs` | `tiles_cover_korea`, `parse_items_and_errors` | 1.5도 타일 16개의 첫·끝 범위, 응답 두 건 해석, `resultCode` 4001은 에러, `items`가 null이면 빈 목록 |
 | `nav/api` `route/guidance.rs` | `intersection_names`, `step_texts` | 남영역앞교차로·신갈JC(북측)·반포IC는 교차로 이름이고 하월곡동 26-14·야당동1040은 지번, 좌회전·1시 방향·오른쪽 출구 방면·유턴 문장 |
 | `nav/api` `accident/index.rs` | `sections_along_route`, `parse_ring_rejects_bad_text` | 겹치는 정사각형 두 개가 한 구간이고 경계에 닿는 선분까지 0~500m, 떨어진 정사각형은 600~1,000m, 밖을 지나면 없음, 점 3개 미만과 숫자 아닌 좌표는 에러 |
 | `nav/api` `geocode/service.rs` | `parse_place_and_not_found` | 브이월드 PLACE 응답의 서울역 한 건 변환과 좌표 없는 건 제외, NOT_FOUND는 빈 목록, ERROR는 502 |
 | `nav/api` `tests/geocode_api.rs` | `geocode_requests` | 서울역 장소 검색의 첫 결과와 좌표 범위, 한강대로 405 주소 검색, 없는 장소는 빈 목록, 빈 검색어는 400 |
+| `nav/api` `tests/route_api.rs` | `update_channel_applies_and_broadcasts` | 채널로 보낸 전면 통제 묶음이 적용되어 순번 1 이벤트가 오고 경로가 그 링크를 피함, 돌발 배율 되돌리기 뒤 순번 2 `reset` 이벤트와 처음 경로 복귀 |
 | `nav/api` `tests/route_api.rs` | `weight_updates_change_route` | 가운데 링크 전면 통제 뒤 경로가 그 링크를 피함, 속도 배율 2 뒤 시간 증가와 거리 경로 불변, 되돌리면 처음과 같음 |
 | `nav/api` `tests/route_api.rs` | `route_requests` | 서울역→강남역 링크 104개와 첫 안내 좌회전 한강대로77길, 서울역→부산역 최소시간 영업소 4곳, 사고다발 구간이 있고 시작 거리가 끝 거리 이하, 안내문 7개와 첫 안내문 "남영역앞교차로에서 좌회전, 한강대로77길", 경고 맨 앞이 높이 제한 3.8m이고 거리 순서, 바다 출발 404 ROUTE_NOT_FOUND, 위도 91과 프로파일 fast는 400 BAD_REQUEST, 없는 주소 404 NOT_FOUND |
 | `file.rs` | `write_and_open_same_graph`, `open_other_file` | 저장 후 다시 열면 배열 35개 일치, 교차로 이름 가교차로, 가→라 링크의 높이 450cm·하중 4,500kg·트럭 금지·제한속도 30·도로등급 104·연결로, 지점 2개의 배열과 간선별 범위, 도로명 3개와 가→라 링크의 도로명 능안로, 다른 파일은 에러 |

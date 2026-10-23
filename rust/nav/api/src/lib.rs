@@ -1,6 +1,7 @@
 //! 내비 API. 라우터 조립은 여기서 하며 main.rs와 통합 테스트가 같이 사용한다.
 
 pub mod accident;
+pub mod collector;
 pub mod error;
 pub mod extract;
 pub mod geocode;
@@ -10,6 +11,7 @@ pub mod state;
 
 use axum::Router;
 use axum::http::Uri;
+use axum::routing::get;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -19,6 +21,7 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .merge(route::router())
         .merge(geocode::router())
+        .route("/events", get(collector::handler::events))
         .fallback(not_found)
         .with_state(state)
 }

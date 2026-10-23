@@ -9,9 +9,11 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use nav_api::accident::index::AccidentIndex;
+use nav_api::collector::{self, Batch};
 use nav_api::state::AppState;
 use routedb_core::route::{RouteDb, WeightUpdate};
 use serde_json::{Value, json};
+use tokio::sync::broadcast;
 use tower::ServiceExt;
 
 const GRAPH_DIR: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb";
@@ -24,6 +26,12 @@ fn app() -> Router {
 
 /// 라우터와 함께 `RouteDb`도 반환한다. 가중치 갱신 테스트가 사용한다
 fn app_with_db() -> (Router, Arc<RouteDb>) {
+    let (app, db, _) = app_with_state();
+    (app, db)
+}
+
+/// 라우터, `RouteDb`, 앱 상태를 반환한다. 적용 태스크와 이벤트 채널도 만든다
+fn app_with_state() -> (Router, Arc<RouteDb>, AppState) {
     let dir = Path::new(GRAPH_DIR);
     let db = RouteDb::open(
         &dir.join("moct.rdb"),
@@ -38,13 +46,18 @@ fn app_with_db() -> (Router, Arc<RouteDb>) {
     let accidents =
         AccidentIndex::load(Path::new(ACCIDENT_FILE)).expect("사고다발 폴리곤 파일을 읽지 못함");
     let db = Arc::new(db);
-    let app = nav_api::app(AppState {
+    let (events, _) = broadcast::channel(64);
+    let updates = collector::start(Arc::clone(&db), events.clone());
+    let state = AppState {
         db: Arc::clone(&db),
         accidents: Arc::new(accidents),
         http: reqwest::Client::new(),
         vworld_key: String::new(),
-    });
-    (app, db)
+        updates,
+        events,
+    };
+    let app = nav_api::app(state.clone());
+    (app, db, state)
 }
 
 /// 요청 하나를 보내고 (상태 코드, 본문)을 반환한다
@@ -193,8 +206,8 @@ async fn weight_updates_change_route() {
     let blocked = links[links.len() / 2];
     let report = db.update_weights(&[WeightUpdate {
         link_id: blocked,
-        speed_factor: 1.0,
-        incident_factor: f32::INFINITY,
+        speed_factor: None,
+        incident_factor: Some(f32::INFINITY),
     }]);
     assert_eq!((report.applied, report.unknown, report.blocked), (1, 0, 1));
     eprintln!("update_weights 전면 통제 1건 {:.0}ms", report.elapsed_ms);
@@ -215,8 +228,8 @@ async fn weight_updates_change_route() {
         .iter()
         .map(|&link_id| WeightUpdate {
             link_id,
-            speed_factor: 2.0,
-            incident_factor: 1.0,
+            speed_factor: Some(2.0),
+            incident_factor: None,
         })
         .collect();
     let report = db.update_weights(&updates);
@@ -245,4 +258,60 @@ async fn weight_updates_change_route() {
     let (_, restored) = send(&app, "POST", "/route", body).await;
     assert_eq!(restored["data"]["links"], before["data"]["links"]);
     assert_eq!(restored["data"]["duration_s"].as_f64(), Some(duration));
+}
+
+#[tokio::test]
+async fn update_channel_applies_and_broadcasts() {
+    let (app, _db, state) = app_with_state();
+    let body = json!({"from": {"lat": 37.5547, "lon": 126.9707}, "to": {"lat": 37.4979, "lon": 127.0276}, "profile": "time"});
+    let (_, before) = send(&app, "POST", "/route", body.clone()).await;
+    let links: Vec<u64> = before["data"]["links"]
+        .as_array()
+        .expect("links")
+        .iter()
+        .map(|l| l.as_u64().expect("LINK_ID"))
+        .collect();
+
+    // 폴링 태스크처럼 채널로 배율 묶음을 보내면 적용 태스크가 반영하고 이벤트를 보낸다
+    let mut events = state.events.subscribe();
+    let blocked = links[links.len() / 2];
+    state
+        .updates
+        .send(Batch::Updates(vec![WeightUpdate {
+            link_id: blocked,
+            speed_factor: None,
+            incident_factor: Some(f32::INFINITY),
+        }]))
+        .await
+        .expect("채널 전송 실패");
+    let event = tokio::time::timeout(std::time::Duration::from_secs(10), events.recv())
+        .await
+        .expect("이벤트 대기 시간 초과")
+        .expect("이벤트 수신 실패");
+    assert_eq!(
+        (event.applied, event.blocked, event.sequence, event.reset),
+        (1, 1, 1, false)
+    );
+    let (_, after) = send(&app, "POST", "/route", body).await;
+    let after_links: Vec<u64> = after["data"]["links"]
+        .as_array()
+        .expect("links")
+        .iter()
+        .map(|l| l.as_u64().expect("LINK_ID"))
+        .collect();
+    assert!(!after_links.contains(&blocked));
+
+    // 돌발 배율만 되돌리면 통제가 풀려 처음 경로로 돌아온다
+    state
+        .updates
+        .send(Batch::Reset(routedb_core::route::FactorKind::Incident))
+        .await
+        .expect("채널 전송 실패");
+    let event = tokio::time::timeout(std::time::Duration::from_secs(10), events.recv())
+        .await
+        .expect("이벤트 대기 시간 초과")
+        .expect("이벤트 수신 실패");
+    assert_eq!((event.blocked, event.sequence, event.reset), (0, 2, true));
+    let (_, restored) = send(&app, "POST", "/route", json!({"from": {"lat": 37.5547, "lon": 126.9707}, "to": {"lat": 37.4979, "lon": 127.0276}, "profile": "time"})).await;
+    assert_eq!(restored["data"]["links"], before["data"]["links"]);
 }

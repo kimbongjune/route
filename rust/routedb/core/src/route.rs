@@ -383,12 +383,22 @@ impl Metrics {
     }
 }
 
-/// 링크 하나의 실시간 배율. 통행 시간에 속도 배율과 돌발 배율을 곱한다. 전면 통제는 돌발 배율 무한대이다
+/// 링크 하나의 실시간 배율. 통행 시간에 속도 배율과 돌발 배율을 곱한다. 전면 통제는 돌발 배율 무한대이다.
+/// None인 배율은 이전 값을 유지하므로 소통정보와 돌발정보를 따로 반영할 수 있다
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WeightUpdate {
     pub link_id: u64,
-    pub speed_factor: f32,
-    pub incident_factor: f32,
+    pub speed_factor: Option<f32>,
+    pub incident_factor: Option<f32>,
+}
+
+/// 실시간 배율의 종류
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FactorKind {
+    /// 소통정보의 속도 배율
+    Speed,
+    /// 돌발정보의 돌발 배율
+    Incident,
 }
 
 /// `update_weights` 결과
@@ -416,8 +426,8 @@ pub struct RouteDb {
     metrics: RwLock<Arc<Metrics>>,
     /// 파일에서 연 정적 metric 묶음. 배율을 되돌릴 때 사용한다
     base_metrics: Arc<Metrics>,
-    /// 간선마다 실시간 시간 배율. 기본 1.0
-    factors: RwLock<Vec<f32>>,
+    /// 간선마다 속도 배율과 돌발 배율. 기본 1.0이며 시간 배율은 둘의 곱이다
+    factors: RwLock<(Vec<f32>, Vec<f32>)>,
     /// LINK_ID에서 간선 번호
     edge_of_link: HashMap<u64, u32>,
 }
@@ -498,7 +508,10 @@ impl RouteDb {
             .enumerate()
             .map(|(e, &id)| (id, e as u32))
             .collect();
-        let factors = vec![1.0f32; file.edge_count()];
+        let factors = (
+            vec![1.0f32; file.edge_count()],
+            vec![1.0f32; file.edge_count()],
+        );
         Ok(Self {
             file,
             index,
@@ -544,9 +557,15 @@ impl RouteDb {
         Arc::clone(&self.metrics.read().expect("metrics 잠금 실패"))
     }
 
-    /// 간선마다 현재 실시간 시간 배율
+    /// 간선마다 현재 시간 배율. 속도 배율과 돌발 배율의 곱이다
     pub fn factors(&self) -> Vec<f32> {
-        self.factors.read().expect("factors 잠금 실패").clone()
+        let (speed, incident) = &*self.factors.read().expect("factors 잠금 실패");
+        speed.iter().zip(incident).map(|(s, i)| s * i).collect()
+    }
+
+    /// LINK_ID의 간선 번호
+    pub fn edge_of_link(&self, link_id: u64) -> Option<u32> {
+        self.edge_of_link.get(&link_id).copied()
     }
 
     pub fn router<'a>(&'a self, cch_view: &'a CchView<'a>, metrics: &'a Metrics) -> Router<'a> {
@@ -562,19 +581,30 @@ impl RouteDb {
     pub fn update_weights(&self, updates: &[WeightUpdate]) -> UpdateReport {
         let started = Instant::now();
         let (applied, unknown, blocked, factors) = {
-            let mut factors = self.factors.write().expect("factors 잠금 실패");
+            let mut guard = self.factors.write().expect("factors 잠금 실패");
+            let (speed, incident) = &mut *guard;
             let (mut applied, mut unknown) = (0, 0);
             for update in updates {
                 match self.edge_of_link.get(&update.link_id) {
                     Some(&e) => {
-                        factors[e as usize] = update.speed_factor * update.incident_factor;
+                        if let Some(f) = update.speed_factor {
+                            speed[e as usize] = f;
+                        }
+                        if let Some(f) = update.incident_factor {
+                            incident[e as usize] = f;
+                        }
                         applied += 1;
                     }
                     None => unknown += 1,
                 }
             }
+            let factors: Vec<f32> = speed
+                .iter()
+                .zip(incident.iter())
+                .map(|(s, i)| s * i)
+                .collect();
             let blocked = factors.iter().filter(|f| f.is_infinite()).count();
-            (applied, unknown, blocked, factors.clone())
+            (applied, unknown, blocked, factors)
         };
         let new_metrics = self.customized_metrics(&factors);
         *self.metrics.write().expect("metrics 잠금 실패") = Arc::new(new_metrics);
@@ -586,13 +616,41 @@ impl RouteDb {
         }
     }
 
+    /// 한 종류의 배율만 모두 1.0으로 되돌리고 다시 customize한다. 다른 종류의 배율은 유지된다
+    pub fn reset_factors(&self, kind: FactorKind) -> UpdateReport {
+        let started = Instant::now();
+        let (blocked, factors) = {
+            let mut guard = self.factors.write().expect("factors 잠금 실패");
+            let target = match kind {
+                FactorKind::Speed => &mut guard.0,
+                FactorKind::Incident => &mut guard.1,
+            };
+            target.iter_mut().for_each(|f| *f = 1.0);
+            let factors: Vec<f32> = guard
+                .0
+                .iter()
+                .zip(guard.1.iter())
+                .map(|(s, i)| s * i)
+                .collect();
+            let blocked = factors.iter().filter(|f| f.is_infinite()).count();
+            (blocked, factors)
+        };
+        let new_metrics = self.customized_metrics(&factors);
+        *self.metrics.write().expect("metrics 잠금 실패") = Arc::new(new_metrics);
+        UpdateReport {
+            applied: 0,
+            unknown: 0,
+            blocked,
+            elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+        }
+    }
+
     /// 실시간 배율을 모두 1.0으로 되돌리고 파일에서 연 정적 metric으로 돌아간다
     pub fn reset_weights(&self) {
-        self.factors
-            .write()
-            .expect("factors 잠금 실패")
-            .iter_mut()
-            .for_each(|f| *f = 1.0);
+        let mut guard = self.factors.write().expect("factors 잠금 실패");
+        guard.0.iter_mut().for_each(|f| *f = 1.0);
+        guard.1.iter_mut().for_each(|f| *f = 1.0);
+        drop(guard);
         *self.metrics.write().expect("metrics 잠금 실패") = Arc::clone(&self.base_metrics);
     }
 
