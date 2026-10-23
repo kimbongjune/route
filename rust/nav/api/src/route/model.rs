@@ -1,6 +1,9 @@
 use routedb_core::route::{Profile, Route};
 use serde::{Deserialize, Serialize};
 
+use super::guidance::{Instruction, Warning};
+use crate::accident::model::AccidentSection;
+
 /// 위경도
 #[derive(Clone, Copy, Debug, Deserialize)]
 pub struct LatLon {
@@ -21,10 +24,15 @@ fn default_profile() -> Profile {
     Profile::Distance
 }
 
-/// `POST /route` 응답. `Route`의 필드에 탐색 시간을 더한다
+/// `POST /route` 응답. `Route`의 필드에 경로가 지나는 사고다발 구간, 안내문, 경고, 탐색 시간을 더한다
 #[derive(Serialize)]
 pub struct RouteResponse {
     #[serde(flatten)]
     pub route: Route,
+    pub accident_sections: Vec<AccidentSection>,
+    /// 안내 지점마다의 안내문. `steps`와 같은 순서
+    pub instructions: Vec<Instruction>,
+    /// 경로 위 경고. 거리 순서이며 경로 전체 통과제한은 맨 앞, 요금소는 맨 뒤
+    pub warnings: Vec<Warning>,
     pub elapsed_ms: f64,
 }

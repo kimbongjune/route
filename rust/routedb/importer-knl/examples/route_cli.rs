@@ -136,7 +136,7 @@ fn main() {
             SignColor::Blue => "청색",
         };
         println!(
-            "  {:.0}m {:?} {:.0}°{} {} → {} {} {} ({:.6}, {:.6})",
+            "  {:.0}m {:?} {:.0}°{} {} → {} {} {} @{} ({:.6}, {:.6})",
             step.at_m,
             step.turn,
             step.angle,
@@ -145,6 +145,7 @@ fn main() {
             name_or(&step.to_name),
             step.to_rank,
             sign,
+            name_or(&step.node_name),
             step.lat,
             step.lon
         );

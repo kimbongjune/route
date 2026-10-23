@@ -1,5 +1,6 @@
 //! 내비 API. 라우터 조립은 여기서 하며 main.rs와 통합 테스트가 같이 사용한다.
 
+pub mod accident;
 pub mod error;
 pub mod extract;
 pub mod geocode;

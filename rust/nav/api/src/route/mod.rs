@@ -1,5 +1,6 @@
 //! 경로 기능. handler가 HTTP를 받고 service가 RouteDb를 호출한다
 
+pub mod guidance;
 mod handler;
 pub mod model;
 pub mod service;

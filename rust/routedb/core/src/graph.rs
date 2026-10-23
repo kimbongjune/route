@@ -7,11 +7,18 @@ pub struct NodeInput {
     pub id: u64,
     pub lat: f64,
     pub lon: f64,
+    /// 교차로 이름 NODE_NAME. 없으면 빈 문자열
+    pub name: String,
 }
 
 impl NodeInput {
     pub fn new(id: u64, lat: f64, lon: f64) -> Self {
-        Self { id, lat, lon }
+        Self {
+            id,
+            lat,
+            lon,
+            name: String::new(),
+        }
     }
 }
 
@@ -139,6 +146,10 @@ pub struct Graph {
     pub road_name: Vec<u16>,
     /// 도로명 표. 간선 순서대로 처음 나온 이름에 번호를 붙인다
     pub road_names: Vec<String>,
+    /// 교차로마다 교차로 이름 번호. node_names[0]은 빈 이름이다
+    pub node_name: Vec<u32>,
+    /// 교차로 이름 표. 교차로 순서대로 처음 나온 이름에 번호를 부여한다
+    pub node_names: Vec<String>,
 }
 
 impl Graph {
@@ -202,6 +213,22 @@ impl Graph {
             };
             road_name.push(k);
         }
+        // 교차로 이름 표
+        let mut node_names = vec![String::new()];
+        let mut node_name_index: HashMap<&str, u32> = HashMap::from([("", 0u32)]);
+        let mut node_name = Vec::with_capacity(nodes.len());
+        for n in nodes {
+            let k = match node_name_index.get(n.name.as_str()) {
+                Some(&k) => k,
+                None => {
+                    let k = node_names.len() as u32;
+                    node_names.push(n.name.clone());
+                    node_name_index.insert(&n.name, k);
+                    k
+                }
+            };
+            node_name.push(k);
+        }
         let graph = Self {
             node_id: nodes.iter().map(|n| n.id).collect(),
             first_out,
@@ -229,6 +256,8 @@ impl Graph {
             poi_enforce: Vec::new(),
             road_name,
             road_names,
+            node_name,
+            node_names,
         };
         (graph, skipped)
     }
@@ -328,6 +357,11 @@ impl Graph {
         &self.road_names[self.road_name[e] as usize]
     }
 
+    /// 교차로 v의 이름. 없으면 빈 문자열
+    pub fn node_name_of(&self, v: usize) -> &str {
+        &self.node_names[self.node_name[v] as usize]
+    }
+
     /// 교차로 v에서 출발하는 간선 번호 범위
     pub fn out_edges(&self, v: u32) -> Range<usize> {
         self.first_out[v as usize] as usize..self.first_out[v as usize + 1] as usize
@@ -401,6 +435,33 @@ mod tests {
         assert_eq!(g.tolls_of(e(20)), [29]);
         assert_eq!(g.tolls_of(e(30)), [] as [u32; 0]);
         assert_eq!(g.toll_first.len(), 4);
+    }
+
+    #[test]
+    fn node_name_table() {
+        let mut nodes = [
+            NodeInput::new(1, 37.0, 127.0),
+            NodeInput::new(2, 37.0, 127.001),
+            NodeInput::new(3, 37.001, 127.001),
+        ];
+        nodes[0].name = "남영역앞교차로".to_string();
+        nodes[2].name = "남영역앞교차로".to_string();
+        // 교차로 2는 이름이 없다
+        let links = [
+            LinkInput::new(10, 1, 2, 100.0),
+            LinkInput::new(20, 2, 3, 100.0),
+        ];
+        let (g, _) = Graph::build(&nodes, &links);
+        assert_eq!(g.node_names, ["", "남영역앞교차로"]);
+        let v = |id: u64| g.node_id.iter().position(|&x| x == id).unwrap();
+        assert_eq!(
+            (
+                g.node_name_of(v(1)),
+                g.node_name_of(v(2)),
+                g.node_name_of(v(3))
+            ),
+            ("남영역앞교차로", "", "남영역앞교차로")
+        );
     }
 
     #[test]

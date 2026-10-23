@@ -8,12 +8,15 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
+use nav_api::accident::index::AccidentIndex;
 use nav_api::state::AppState;
 use routedb_core::route::RouteDb;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
 const GRAPH_DIR: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb";
+const ACCIDENT_FILE: &str =
+    r"C:\Users\nocdu\Desktop\dev\route\maps\전국교통사고다발지역표준데이터\사고다발_폴리곤.csv";
 
 fn app() -> Router {
     let dir = Path::new(GRAPH_DIR);
@@ -27,8 +30,11 @@ fn app() -> Router {
         ],
     )
     .expect("그래프 파일을 열지 못함");
+    let accidents =
+        AccidentIndex::load(Path::new(ACCIDENT_FILE)).expect("사고다발 폴리곤 파일을 읽지 못함");
     nav_api::app(AppState {
         db: Arc::new(db),
+        accidents: Arc::new(accidents),
         http: reqwest::Client::new(),
         vworld_key: String::new(),
     })
@@ -77,6 +83,34 @@ async fn route_requests() {
     assert_eq!(data["steps"].as_array().map(Vec::len), Some(7));
     assert_eq!(data["steps"][0]["turn"], "left");
     assert_eq!(data["steps"][0]["to_name"], "한강대로77길");
+    // 안내문은 안내 지점과 같은 수이고 첫 안내문은 남영역앞교차로 좌회전이다
+    let instructions = data["instructions"].as_array().expect("instructions 배열");
+    assert_eq!(instructions.len(), 7);
+    assert_eq!(
+        instructions[0]["text"],
+        "남영역앞교차로에서 좌회전, 한강대로77길"
+    );
+    // 경고는 높이 제한이 맨 앞이고 거리 순서이다
+    let warnings = data["warnings"].as_array().expect("warnings 배열");
+    assert_eq!(warnings[0]["kind"], "height_limit");
+    assert_eq!(warnings[0]["text"], "높이 제한 3.8m");
+    let along: Vec<f64> = warnings.iter().filter_map(|w| w["at_m"].as_f64()).collect();
+    assert!(along.windows(2).all(|p| p[0] <= p[1]));
+    assert!(warnings.iter().any(|w| w["kind"] == "speed_camera"));
+    assert!(warnings.iter().any(|w| w["kind"] == "accident_zone"));
+    let sections = data["accident_sections"]
+        .as_array()
+        .expect("accident_sections 배열");
+    assert!(!sections.is_empty());
+    for s in sections {
+        assert!(s["from_m"].as_f64().expect("from_m") <= s["to_m"].as_f64().expect("to_m"));
+        assert!(!s["zones"].as_array().expect("zones").is_empty());
+    }
+    let summary: Vec<Value> = sections
+        .iter()
+        .map(|s| json!({"kind": s["kind"], "from_m": s["from_m"], "to_m": s["to_m"], "zones": s["zones"].as_array().map(Vec::len)}))
+        .collect();
+    eprintln!("사고다발 구간 {}", Value::Array(summary));
 
     // 서울역→부산역 최소시간 경로는 영업소 4곳을 지난다
     let (status, body) = send(

@@ -41,7 +41,9 @@ fn main() {
         .iter()
         .map(|&i| {
             let (lat, lon) = tm.convert(nodes[i].x, nodes[i].y);
-            NodeInput::new(nodes[i].id, lat, lon)
+            let mut input = NodeInput::new(nodes[i].id, lat, lon);
+            input.name = nodes[i].name.clone();
+            input
         })
         .collect();
 

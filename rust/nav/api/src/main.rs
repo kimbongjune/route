@@ -1,6 +1,6 @@
 //! 내비 API 서버. 그래프 파일을 열어 `AppState`를 만들고 lib.rs의 `app`으로 라우터를 조립한다.
 //!
-//! cargo run --release -p nav-api -- [그래프 폴더] [주소]
+//! cargo run --release -p nav-api -- [그래프 폴더] [주소] [사고다발 폴리곤 CSV]
 //! 그래프 폴더는 moct.rdb, moct.cch-struct, moct.cch-metric, moct.cch-metric-time, moct.cch-metric-free가 있는 폴더이다.
 //! 브이월드 인증키는 환경 변수 VWORLD_API_KEY 또는 저장소 루트 .env의 VWORLD_API_KEY에서 읽는다.
 
@@ -8,11 +8,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
+use nav_api::accident::index::AccidentIndex;
 use nav_api::state::AppState;
 use routedb_core::route::RouteDb;
 
 const DEFAULT_GRAPH_DIR: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb";
 const DEFAULT_ADDR: &str = "127.0.0.1:3000";
+const DEFAULT_ACCIDENT_FILE: &str =
+    r"C:\Users\nocdu\Desktop\dev\route\maps\전국교통사고다발지역표준데이터\사고다발_폴리곤.csv";
 const ENV_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../.env");
 
 /// 그래프 폴더의 파일 다섯 개로 `RouteDb`를 연다
@@ -51,6 +54,7 @@ async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let dir = Path::new(args.first().map_or(DEFAULT_GRAPH_DIR, String::as_str));
     let addr = args.get(1).map_or(DEFAULT_ADDR, String::as_str);
+    let accident_file = Path::new(args.get(2).map_or(DEFAULT_ACCIDENT_FILE, String::as_str));
     let vworld_key = env_value("VWORLD_API_KEY").expect("VWORLD_API_KEY가 없음");
 
     let started = Instant::now();
@@ -59,9 +63,17 @@ async fn main() {
         "그래프와 CCH 번들 열기, R-tree 생성 {:.1}초",
         started.elapsed().as_secs_f64()
     );
+    let started = Instant::now();
+    let accidents = AccidentIndex::load(accident_file).expect("사고다발 폴리곤 파일을 읽지 못함");
+    println!(
+        "사고다발 폴리곤 {}개 R-tree 생성 {:.2}초",
+        accidents.len(),
+        started.elapsed().as_secs_f64()
+    );
 
     let app = nav_api::app(AppState {
         db: Arc::new(db),
+        accidents: Arc::new(accidents),
         http: reqwest::Client::new(),
         vworld_key,
     });

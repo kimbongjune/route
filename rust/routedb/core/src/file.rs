@@ -10,15 +10,15 @@ use crate::linegraph::LineGraph;
 
 /// 그래프 파일 맨 앞 8바이트
 pub const MAGIC: &[u8; 8] = b"ROUTEDB\0";
-pub const VERSION: u32 = 10;
+pub const VERSION: u32 = 11;
 /// MAGIC 8 + VERSION 4 + 빈칸 4 + 교차로 수 8 + 간선 수 8 + 링크 좌표 수 8 + 통행 수 8 + 경유 링크 수 8 + 영업소코드 수 8 + 지점 수 8
-/// + 도로명 수 8 + 도로명 바이트 수 8
-pub const HEADER_LEN: usize = 88;
+/// + 도로명 수 8 + 도로명 바이트 수 8 + 교차로 이름 수 8 + 교차로 이름 바이트 수 8
+pub const HEADER_LEN: usize = 104;
 
 impl Graph {
     /// 그래프와 line graph를 헤더, 8바이트 배열(node_id, link_id, length, lat, lon, geom_lat, geom_lon, turn_weight),
-    /// 4바이트 배열(first_out, head, geom_first, turn_first_out, turn_head, via_first, via, toll_first, toll_unit, poi_first, poi_id),
-    /// 2바이트 배열(rest_w, rest_h, max_spd, poi_at), 1바이트 배열(rest_veh, road_rank, ramp, poi_kind, poi_limit, poi_enforce, name_bytes) 순서로 파일에 저장한다.
+    /// 4바이트 배열(first_out, head, geom_first, turn_first_out, turn_head, via_first, via, toll_first, toll_unit, poi_first, poi_id, name_first, node_name_first, node_name),
+    /// 2바이트 배열(rest_w, rest_h, max_spd, poi_at), 1바이트 배열(rest_veh, road_rank, ramp, poi_kind, poi_limit, poi_enforce, name_bytes, node_name_bytes) 순서로 파일에 저장한다.
     pub fn write(&self, line: &LineGraph, path: &Path) -> Result<()> {
         let mut w = BufWriter::new(File::create(path)?);
 
@@ -42,6 +42,15 @@ impl Graph {
         }
         w.write_all(&(self.road_names.len() as u64).to_le_bytes())?;
         w.write_all(&(name_bytes.len() as u64).to_le_bytes())?;
+        // 교차로 이름 표도 같은 방식이다
+        let node_name_bytes: Vec<u8> = self.node_names.concat().into_bytes();
+        let mut node_name_first = Vec::with_capacity(self.node_names.len() + 1);
+        node_name_first.push(0u32);
+        for name in &self.node_names {
+            node_name_first.push(node_name_first.last().unwrap() + name.len() as u32);
+        }
+        w.write_all(&(self.node_names.len() as u64).to_le_bytes())?;
+        w.write_all(&(node_name_bytes.len() as u64).to_le_bytes())?;
 
         // 8바이트 배열
         w.write_all(bytemuck::cast_slice(&self.node_id))?;
@@ -66,6 +75,8 @@ impl Graph {
         w.write_all(bytemuck::cast_slice(&self.poi_first))?;
         w.write_all(bytemuck::cast_slice(&self.poi_id))?;
         w.write_all(bytemuck::cast_slice(&name_first))?;
+        w.write_all(bytemuck::cast_slice(&node_name_first))?;
+        w.write_all(bytemuck::cast_slice(&self.node_name))?;
 
         // 2바이트 배열과 1바이트 배열
         w.write_all(bytemuck::cast_slice(&self.rest_w))?;
@@ -80,6 +91,7 @@ impl Graph {
         w.write_all(&self.poi_limit)?;
         w.write_all(&self.poi_enforce)?;
         w.write_all(&name_bytes)?;
+        w.write_all(&node_name_bytes)?;
 
         w.flush()
     }
@@ -97,8 +109,10 @@ pub struct GraphFile {
     poi_count: usize,
     name_count: usize,
     name_byte_count: usize,
+    node_name_count: usize,
+    node_name_byte_count: usize,
     /// 배열별 파일 내 위치
-    ranges: [Range<usize>; 32],
+    ranges: [Range<usize>; 35],
 }
 
 impl GraphFile {
@@ -127,41 +141,46 @@ impl GraphFile {
         let poi_count = count(64);
         let name_count = count(72);
         let name_byte_count = count(80);
+        let node_name_count = count(88);
+        let node_name_byte_count = count(96);
 
         // 배열별 파일 내 위치 계산
         let sizes = [
-            8 * node_count,       // node_id
-            8 * edge_count,       // link_id
-            8 * edge_count,       // length
-            8 * node_count,       // lat
-            8 * node_count,       // lon
-            8 * geom_count,       // geom_lat
-            8 * geom_count,       // geom_lon
-            8 * turn_count,       // turn_weight
-            4 * (node_count + 1), // first_out
-            4 * edge_count,       // head
-            4 * (edge_count + 1), // geom_first
-            4 * (edge_count + 1), // turn_first_out
-            4 * turn_count,       // turn_head
-            4 * (turn_count + 1), // via_first
-            4 * via_count,        // via
-            4 * (edge_count + 1), // toll_first
-            4 * toll_count,       // toll_unit
-            4 * (edge_count + 1), // poi_first
-            4 * poi_count,        // poi_id
-            4 * (name_count + 1), // name_first
-            2 * edge_count,       // rest_w
-            2 * edge_count,       // rest_h
-            2 * edge_count,       // max_spd
-            2 * poi_count,        // poi_at
-            2 * edge_count,       // road_name
-            edge_count,           // rest_veh
-            edge_count,           // road_rank
-            edge_count,           // ramp
-            poi_count,            // poi_kind
-            poi_count,            // poi_limit
-            poi_count,            // poi_enforce
-            name_byte_count,      // name_bytes
+            8 * node_count,            // node_id
+            8 * edge_count,            // link_id
+            8 * edge_count,            // length
+            8 * node_count,            // lat
+            8 * node_count,            // lon
+            8 * geom_count,            // geom_lat
+            8 * geom_count,            // geom_lon
+            8 * turn_count,            // turn_weight
+            4 * (node_count + 1),      // first_out
+            4 * edge_count,            // head
+            4 * (edge_count + 1),      // geom_first
+            4 * (edge_count + 1),      // turn_first_out
+            4 * turn_count,            // turn_head
+            4 * (turn_count + 1),      // via_first
+            4 * via_count,             // via
+            4 * (edge_count + 1),      // toll_first
+            4 * toll_count,            // toll_unit
+            4 * (edge_count + 1),      // poi_first
+            4 * poi_count,             // poi_id
+            4 * (name_count + 1),      // name_first
+            4 * (node_name_count + 1), // node_name_first
+            4 * node_count,            // node_name
+            2 * edge_count,            // rest_w
+            2 * edge_count,            // rest_h
+            2 * edge_count,            // max_spd
+            2 * poi_count,             // poi_at
+            2 * edge_count,            // road_name
+            edge_count,                // rest_veh
+            edge_count,                // road_rank
+            edge_count,                // ramp
+            poi_count,                 // poi_kind
+            poi_count,                 // poi_limit
+            poi_count,                 // poi_enforce
+            name_byte_count,           // name_bytes
+            node_name_byte_count,      // node_name_bytes
         ];
         let mut start = HEADER_LEN;
         let ranges = sizes.map(|size| {
@@ -190,6 +209,8 @@ impl GraphFile {
             poi_count,
             name_count,
             name_byte_count,
+            node_name_count,
+            node_name_byte_count,
             ranges,
         })
     }
@@ -228,6 +249,43 @@ impl GraphFile {
 
     pub fn name_byte_count(&self) -> usize {
         self.name_byte_count
+    }
+
+    pub fn node_name_count(&self) -> usize {
+        self.node_name_count
+    }
+
+    pub fn node_name_byte_count(&self) -> usize {
+        self.node_name_byte_count
+    }
+
+    /// 교차로 이름마다 node_name_bytes에서 시작하는 위치
+    pub fn node_name_first(&self) -> &[u32] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[20].clone()])
+    }
+
+    /// 교차로마다 교차로 이름 번호. 0은 빈 이름이다
+    pub fn node_name(&self) -> &[u32] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[21].clone()])
+    }
+
+    /// 교차로 이름을 UTF-8로 이은 바이트
+    pub fn node_name_bytes(&self) -> &[u8] {
+        &self.mmap[self.ranges[34].clone()]
+    }
+
+    /// k번 교차로 이름
+    pub fn node_name_text(&self, k: usize) -> &str {
+        let (s, t) = (
+            self.node_name_first()[k] as usize,
+            self.node_name_first()[k + 1] as usize,
+        );
+        std::str::from_utf8(&self.node_name_bytes()[s..t]).expect("교차로 이름이 UTF-8이 아님")
+    }
+
+    /// 교차로 v의 이름. 없으면 빈 문자열
+    pub fn node_name_of(&self, v: usize) -> &str {
+        self.node_name_text(self.node_name()[v] as usize)
     }
 
     pub fn node_id(&self) -> &[u64] {
@@ -327,52 +385,52 @@ impl GraphFile {
 
     /// 간선마다 통과제한하중(kg). 0은 제한 없음
     pub fn rest_w(&self) -> &[u16] {
-        bytemuck::cast_slice(&self.mmap[self.ranges[20].clone()])
+        bytemuck::cast_slice(&self.mmap[self.ranges[22].clone()])
     }
 
     /// 간선마다 통과제한높이(cm). 0은 제한 없음
     pub fn rest_h(&self) -> &[u16] {
-        bytemuck::cast_slice(&self.mmap[self.ranges[21].clone()])
+        bytemuck::cast_slice(&self.mmap[self.ranges[23].clone()])
     }
 
     /// 간선마다 최고제한속도(km/h)
     pub fn max_spd(&self) -> &[u16] {
-        bytemuck::cast_slice(&self.mmap[self.ranges[22].clone()])
+        bytemuck::cast_slice(&self.mmap[self.ranges[24].clone()])
     }
 
     /// 지점마다 링크 안 위치 비율 × 10,000
     pub fn poi_at(&self) -> &[u16] {
-        bytemuck::cast_slice(&self.mmap[self.ranges[23].clone()])
+        bytemuck::cast_slice(&self.mmap[self.ranges[25].clone()])
     }
 
     /// 간선마다 통행제한차량 코드. 0은 제한 없음
     pub fn rest_veh(&self) -> &[u8] {
-        &self.mmap[self.ranges[25].clone()]
+        &self.mmap[self.ranges[27].clone()]
     }
 
     /// 간선마다 도로등급. 101 고속국도부터 108 기타
     pub fn road_rank(&self) -> &[u8] {
-        &self.mmap[self.ranges[26].clone()]
+        &self.mmap[self.ranges[28].clone()]
     }
 
     /// 간선마다 연결로 여부. 1이 램프
     pub fn ramp(&self) -> &[u8] {
-        &self.mmap[self.ranges[27].clone()]
+        &self.mmap[self.ranges[29].clone()]
     }
 
     /// 지점마다 종류. 1 카메라, 2 방지턱
     pub fn poi_kind(&self) -> &[u8] {
-        &self.mmap[self.ranges[28].clone()]
+        &self.mmap[self.ranges[30].clone()]
     }
 
     /// 지점마다 카메라 제한속도(km/h). 0은 없음
     pub fn poi_limit(&self) -> &[u8] {
-        &self.mmap[self.ranges[29].clone()]
+        &self.mmap[self.ranges[31].clone()]
     }
 
     /// 지점마다 카메라 단속구분 비트. 방지턱은 1이 연속형이다
     pub fn poi_enforce(&self) -> &[u8] {
-        &self.mmap[self.ranges[30].clone()]
+        &self.mmap[self.ranges[32].clone()]
     }
 
     /// 간선 e의 지점 번호 범위
@@ -387,12 +445,12 @@ impl GraphFile {
 
     /// 간선마다 도로명 번호. 0은 빈 이름이다
     pub fn road_name(&self) -> &[u16] {
-        bytemuck::cast_slice(&self.mmap[self.ranges[24].clone()])
+        bytemuck::cast_slice(&self.mmap[self.ranges[26].clone()])
     }
 
     /// 도로명을 UTF-8로 이어 붙인 바이트
     pub fn name_bytes(&self) -> &[u8] {
-        &self.mmap[self.ranges[31].clone()]
+        &self.mmap[self.ranges[33].clone()]
     }
 
     /// k번 도로명
@@ -416,13 +474,14 @@ mod tests {
     use crate::graph::{LinkInput, NodeInput, PoiInput, TollInput};
 
     fn demo() -> Graph {
-        let nodes = [
+        let mut nodes = [
             NodeInput::new(1000000101, 37.000, 127.000),
             NodeInput::new(1000000201, 37.000, 127.001),
             NodeInput::new(1000000301, 37.001, 127.001),
             NodeInput::new(1000000401, 37.001, 127.000),
             NodeInput::new(1000000501, 37.002, 127.001),
         ];
+        nodes[1].name = "가교차로".to_string();
         let mut links = vec![
             LinkInput::new(1000001000, 1000000101, 1000000201, 100.0),
             LinkInput::new(1000001100, 1000000201, 1000000101, 100.0),
@@ -547,6 +606,10 @@ mod tests {
         assert_eq!((f.name(0), f.name(1), f.name(2)), ("", "공원로", "능안로"));
         let e = g.link_id.iter().position(|&id| id == 1000003000).unwrap();
         assert_eq!(f.road_name_of(e), "능안로");
+        assert_eq!(f.node_name_count(), g.node_names.len());
+        assert_eq!(f.node_name(), g.node_name.as_slice());
+        assert_eq!(f.node_name_of(0), g.node_name_of(0));
+        assert_eq!(f.node_name_of(1), "가교차로");
         let e = g.link_id.iter().position(|&id| id == 1000003000).unwrap();
         assert_eq!(
             (

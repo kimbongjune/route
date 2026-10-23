@@ -3,11 +3,13 @@ use std::path::Path;
 use routedb_core::graph::LinkInput;
 
 /// MOCT_NODE의 노드. 좌표는 TM이다.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Node {
     pub id: u64,
     pub x: f64,
     pub y: f64,
+    /// 교차로 이름 NODE_NAME. 없으면 빈 문자열
+    pub name: String,
 }
 use shapefile::Shape;
 use shapefile::dbase::{FieldValue, Record};
@@ -31,7 +33,7 @@ fn numeric_field(record: &Record, name: &str) -> Option<f64> {
     }
 }
 
-/// MOCT_NODE.shp에서 노드별 NODE_ID와 TM 좌표(x, y)를 추출한다.
+/// MOCT_NODE.shp에서 노드별 NODE_ID, TM 좌표(x, y), NODE_NAME을 추출한다.
 pub fn read_nodes(folder: &Path) -> Vec<Node> {
     let mut reader = shapefile::Reader::from_path(folder.join("MOCT_NODE.shp")).unwrap();
     let mut nodes = Vec::new();
@@ -44,7 +46,19 @@ pub fn read_nodes(folder: &Path) -> Vec<Node> {
             .expect("NODE_ID 필드가 없음")
             .parse()
             .expect("숫자 필드가 아님");
-        nodes.push(Node { id, x: p.x, y: p.y });
+        // 이름이 없는 노드는 "-"이다
+        let name = text_field(&record, "NODE_NAME").unwrap_or("").trim();
+        let name = if name == "-" {
+            String::new()
+        } else {
+            name.to_string()
+        };
+        nodes.push(Node {
+            id,
+            x: p.x,
+            y: p.y,
+            name,
+        });
     }
     nodes
 }

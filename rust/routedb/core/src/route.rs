@@ -81,6 +81,8 @@ pub struct Step {
     /// 안내 지점의 위경도. 앞 링크의 끝점이다
     pub lat: f64,
     pub lon: f64,
+    /// 안내 지점 교차로의 이름 NODE_NAME. 없으면 빈 문자열
+    pub node_name: String,
     pub turn: Turn,
     /// 진행 방향 변화(°). 시계 방향이 양수
     pub angle: f64,
@@ -651,6 +653,9 @@ impl RouteDb {
                     at_m: ends[t.link],
                     lat: link_ends[t.link].0,
                     lon: link_ends[t.link].1,
+                    node_name: file
+                        .node_name_of(file.head()[edges[t.link] as usize] as usize)
+                        .to_string(),
                     turn: t.turn,
                     angle: t.angle,
                     from_name: file.name(t.from_name as usize).to_string(),
