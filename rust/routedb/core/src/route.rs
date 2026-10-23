@@ -6,6 +6,7 @@ use cch::path::PathQuery;
 
 use crate::file::GraphFile;
 use crate::hierarchy;
+use crate::linegraph;
 use crate::profile;
 use crate::snap::{LinkIndex, Snap};
 
@@ -49,6 +50,169 @@ pub struct RoutePoi {
 pub struct Section {
     pub from_m: f64,
     pub to_m: f64,
+}
+
+/// 회전 방향. 각도는 진행 방향 기준이며 시계 방향이 양수이다.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Turn {
+    /// |각도| < 20°
+    Straight,
+    /// 20° 이상 50° 미만
+    SlightRight,
+    SlightLeft,
+    /// 50° 이상 150° 미만
+    Right,
+    Left,
+    /// 150° 이상
+    UTurn,
+    /// 본선에서 램프로 나가는 출구. 각도가 50° 미만일 때이며 방향은 각도의 부호이다
+    ExitRight,
+    ExitLeft,
+}
+
+/// 안내 지점. 출발점부터의 거리와 회전 방향, 들어가는 도로명이다.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Step {
+    pub at_m: f64,
+    /// 안내 지점의 위경도. 앞 링크의 끝점이다
+    pub lat: f64,
+    pub lon: f64,
+    pub turn: Turn,
+    /// 진행 방향 변화(°). 시계 방향이 양수
+    pub angle: f64,
+    /// 안내 전 도로명
+    pub from_name: String,
+    /// 안내 후 도로명
+    pub to_name: String,
+}
+
+/// 회전 방향을 정할 때 쓰는 링크의 도로명 번호, 길이, 시작·끝 방위각(°, 북 0, 동 90)
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LinkHeading {
+    pub name: u16,
+    pub length: f64,
+    pub start: f64,
+    pub end: f64,
+    /// 연결로(램프) 여부
+    pub ramp: bool,
+    /// 앞 링크의 끝 교차로와 이 링크의 시작 교차로가 달라 건너가는 통행으로 이어졌는지
+    pub bridged: bool,
+}
+
+/// 안내 지점이 되는 링크 번호와 회전
+#[derive(Clone, Debug, PartialEq)]
+pub struct TurnPoint {
+    pub link: usize,
+    pub angle: f64,
+    pub turn: Turn,
+    pub from_name: u16,
+    pub to_name: u16,
+}
+
+/// 교차로 안 짧은 링크로 보는 길이(m). 이보다 짧은 링크는 회전 방향을 정하는 데 쓰지 않는다
+pub const SHORT_LINK_M: f64 = 30.0;
+
+/// 방위각 a에서 b로의 변화(°)를 -180~180으로 정규화한다. 시계 방향이 양수이다.
+pub fn turn_angle(a: f64, b: f64) -> f64 {
+    let d = (b - a).rem_euclid(360.0);
+    if d > 180.0 { d - 360.0 } else { d }
+}
+
+/// 각도로 회전 방향을 정한다.
+pub fn classify(angle: f64) -> Turn {
+    let a = angle.abs();
+    if a < 20.0 {
+        Turn::Straight
+    } else if a >= 150.0 {
+        Turn::UTurn
+    } else if a < 50.0 {
+        if angle > 0.0 {
+            Turn::SlightRight
+        } else {
+            Turn::SlightLeft
+        }
+    } else if angle > 0.0 {
+        Turn::Right
+    } else {
+        Turn::Left
+    }
+}
+
+/// 두 점 사이의 방위각(°). 북이 0, 동이 90이다.
+pub fn bearing(a: (f64, f64), b: (f64, f64)) -> f64 {
+    let dy = (b.0 - a.0) * 111_320.0;
+    let dx = (b.1 - a.1) * 111_320.0 * 0.809_017;
+    dx.atan2(dy).to_degrees().rem_euclid(360.0)
+}
+
+/// 좌표 목록의 시작 방위각과 끝 방위각. 각각 처음과 마지막 span(m) 구간으로 잰다.
+pub fn end_bearings(points: &[(f64, f64)], span: f64) -> (f64, f64) {
+    let total = planar_length(points);
+    let start = bearing(points[0], point_at(points, span.min(total)));
+    let end = bearing(
+        point_at(points, (total - span).max(0.0)),
+        *points.last().unwrap(),
+    );
+    (start, end)
+}
+
+/// 링크 열에서 안내 지점을 찾는다.
+///
+/// SHORT_LINK_M보다 짧은 링크는 교차로 안 링크로 보고 건너뛰며, 그 앞의 긴 링크 끝 방위각과 뒤의 긴 링크 시작 방위각으로
+/// 각도를 잰다. 각도가 50° 이상이거나, 20° 이상이면서 도로명이 바뀌면 안내 지점이고 위치는 앞의 긴 링크 끝이다.
+/// 도로명만 바뀌는 직진과 같은 도로명에서 50° 미만으로 꺾이는 곳은 안내하지 않는다.
+/// 본선에서 램프로 들어가는 50° 미만의 분기는 출구이고, 램프에서 본선으로 들어가는 50° 미만의 합류와
+/// 램프 끝에서 건너가는 통행으로 이어지는 회차는 안내하지 않는다. 램프로 들어가는 안내의 뒤 도로명은
+/// 램프 뒤에 처음 나오는 본선의 이름이며, 램프에서 램프로 넘어갈 때는 도로명이 바뀌어도 안내하지 않는다.
+pub fn turn_points(links: &[LinkHeading]) -> Vec<TurnPoint> {
+    let mut out = Vec::new();
+    let mut prev: Option<usize> = None;
+    for (i, l) in links.iter().enumerate() {
+        if l.length < SHORT_LINK_M && i != 0 && i != links.len() - 1 {
+            continue;
+        }
+        if let Some(p) = prev {
+            let angle = turn_angle(links[p].end, l.start);
+            let bridged = links[p + 1..=i].iter().any(|x| x.bridged);
+            let small = angle.abs() < 50.0;
+            let turn = if links[p].ramp && (bridged || (!l.ramp && small)) {
+                None
+            } else if !links[p].ramp && l.ramp && small {
+                Some(if angle < 0.0 {
+                    Turn::ExitLeft
+                } else {
+                    Turn::ExitRight
+                })
+            } else {
+                Some(classify(angle))
+            };
+            // 램프로 들어가면 안내하는 도로명은 램프 뒤에 처음 나오는 본선의 이름이다
+            let to_name = if l.ramp {
+                links[i..]
+                    .iter()
+                    .find(|x| !x.ramp)
+                    .map_or(l.name, |x| x.name)
+            } else {
+                l.name
+            };
+            // 램프에서 램프로 넘어갈 때는 도로명이 바뀌어도 안내하지 않는다
+            let name_changed = !(links[p].ramp && l.ramp) && links[p].name != to_name;
+            if let Some(turn) = turn {
+                let slight = matches!(turn, Turn::SlightLeft | Turn::SlightRight);
+                if turn != Turn::Straight && (!slight || name_changed) {
+                    out.push(TurnPoint {
+                        link: p,
+                        angle,
+                        turn,
+                        from_name: links[p].name,
+                        to_name,
+                    });
+                }
+            }
+        }
+        prev = Some(i);
+    }
+    out
 }
 
 /// 같은 도로명이 이어지는 구간
@@ -100,6 +264,8 @@ pub struct Route {
     pub pois: Vec<RoutePoi>,
     /// 같은 도로명이 이어지는 구간
     pub segments: Vec<RoadSegment>,
+    /// 안내 지점. 회전하거나 도로명이 바뀌는 곳이다
+    pub steps: Vec<Step>,
     /// 스쿨존 구간. 스쿨존 데이터를 적재하기 전까지 비어 있다
     pub school_zones: Vec<Section>,
     /// 경로 링크의 통과제한높이 최솟값(cm). 0은 제한 없음
@@ -114,6 +280,8 @@ pub struct Route {
 pub struct RouteDb {
     pub file: GraphFile,
     pub index: LinkIndex,
+    /// 간선마다 출발 교차로 번호
+    pub tail: Vec<u32>,
     cch: CchBundle,
     metrics: [MetricBundle; 3],
 }
@@ -178,6 +346,7 @@ impl RouteDb {
     pub fn open(graph: &Path, cch_struct: &Path, metrics: [&Path; 3]) -> io::Result<Self> {
         let file = GraphFile::open(graph)?;
         let index = LinkIndex::build(file.geom_first(), file.geom_lat(), file.geom_lon());
+        let tail = linegraph::tails(file.first_out());
         let cch = CchBundle::open(cch_struct)?;
         let metrics = [
             MetricBundle::open(metrics[0])?,
@@ -187,6 +356,7 @@ impl RouteDb {
         Ok(Self {
             file,
             index,
+            tail,
             cch,
             metrics,
         })
@@ -317,9 +487,11 @@ impl RouteDb {
         let mut prev: &[u32] = &[];
         let mut duration_ms = 0.0;
         let mut walked = 0.0;
+        let mut link_ends: Vec<(f64, f64)> = Vec::with_capacity(edges.len());
         let (mut min_h, mut min_w, mut veh): (u16, u16, Vec<u8>) = (0, 0, Vec::new());
         let mut names = Vec::with_capacity(edges.len());
         let mut parts = Vec::with_capacity(edges.len());
+        let mut headings = Vec::with_capacity(edges.len());
         for (i, &e) in edges.iter().enumerate() {
             let e = e as usize;
             // 이 간선에서 지나는 길이 비율
@@ -328,6 +500,15 @@ impl RouteDb {
             let part = if single { to_frac - from_frac } else { hi - lo };
             let points = self.edge_points(e);
             let piece = sub_polyline(&points, lo, hi);
+            let (start, end) = end_bearings(&piece, 15.0);
+            headings.push(LinkHeading {
+                name: file.road_name()[e],
+                length: part * length[e],
+                start,
+                end,
+                ramp: file.ramp()[e] == 1,
+                bridged: i > 0 && self.tail[e] != file.head()[edges[i - 1] as usize],
+            });
             geometry.extend(piece.iter().skip(if geometry.is_empty() { 0 } else { 1 }));
             duration_ms += profile::link_time_ms(length, max_spd, e) * part;
             // 요금소
@@ -370,7 +551,27 @@ impl RouteDb {
             walked += part * length[e];
             names.push(file.road_name()[e]);
             parts.push(part * length[e]);
+            link_ends.push(*piece.last().expect("링크 좌표가 비어 있음"));
         }
+        // 안내 지점. 위치는 앞의 긴 링크가 끝나는 거리이다
+        let mut ends = Vec::with_capacity(parts.len());
+        let mut acc = 0.0;
+        for p in &parts {
+            acc += p;
+            ends.push(acc);
+        }
+        let steps = turn_points(&headings)
+            .into_iter()
+            .map(|t| Step {
+                at_m: ends[t.link],
+                lat: link_ends[t.link].0,
+                lon: link_ends[t.link].1,
+                turn: t.turn,
+                angle: t.angle,
+                from_name: file.name(t.from_name as usize).to_string(),
+                to_name: file.name(t.to_name as usize).to_string(),
+            })
+            .collect();
         let segments = merge_runs(&names, &parts)
             .into_iter()
             .map(|(name, from_m, to_m, links)| RoadSegment {
@@ -392,6 +593,7 @@ impl RouteDb {
             tolls,
             pois,
             segments,
+            steps,
             school_zones: Vec::new(),
             min_height_cm: min_h,
             min_weight_kg: min_w,
@@ -403,6 +605,108 @@ impl RouteDb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turn_angles_and_classes() {
+        assert_eq!(turn_angle(350.0, 10.0), 20.0);
+        assert_eq!(turn_angle(10.0, 350.0), -20.0);
+        assert_eq!(turn_angle(90.0, 270.0), 180.0);
+        assert_eq!(classify(5.0), Turn::Straight);
+        assert_eq!(classify(30.0), Turn::SlightRight);
+        assert_eq!(classify(-30.0), Turn::SlightLeft);
+        assert_eq!(classify(90.0), Turn::Right);
+        assert_eq!(classify(-120.0), Turn::Left);
+        assert_eq!(classify(170.0), Turn::UTurn);
+        // 북쪽으로 100m 가는 선의 방위각은 0, 동쪽은 90
+        let north = [(37.0, 127.0), (37.0 + 100.0 / 111_320.0, 127.0)];
+        let east = [
+            (37.0, 127.0),
+            (37.0, 127.0 + 100.0 / (111_320.0 * 0.809_017)),
+        ];
+        assert!(end_bearings(&north, 15.0).0.abs() < 1e-6);
+        assert!((end_bearings(&east, 15.0).1 - 90.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn turn_points_skip_short_links() {
+        let link = |name, length, start, end| LinkHeading {
+            name,
+            length,
+            start,
+            end,
+            ramp: false,
+            bridged: false,
+        };
+        // 북으로 가는 도로 1, 교차로 안 12m 링크(도로 2), 동으로 가는 도로 3, 같은 도로 3에서 30° 꺾임, 도로 4로 이름만 바뀜,
+        // 도로 5로 30° 꺾이며 이름이 바뀜
+        let links = [
+            link(1, 200.0, 0.0, 0.0),
+            link(2, 12.0, 45.0, 45.0),
+            link(3, 150.0, 90.0, 90.0),
+            link(3, 150.0, 120.0, 120.0),
+            link(4, 150.0, 125.0, 125.0),
+            link(5, 150.0, 155.0, 155.0),
+        ];
+        let points: Vec<(usize, f64, Turn, u16, u16)> = turn_points(&links)
+            .into_iter()
+            .map(|t| (t.link, t.angle, t.turn, t.from_name, t.to_name))
+            .collect();
+        // 링크 0 끝에서 우회전 90°, 같은 도로의 30° 꺾임과 이름만 바뀌는 직진은 안내하지 않고, 링크 4 끝에서 우측 방향 30°
+        assert_eq!(
+            points,
+            [
+                (0, 90.0, Turn::Right, 1, 3),
+                (4, 30.0, Turn::SlightRight, 4, 5)
+            ]
+        );
+        // 마지막 링크는 짧아도 건너뛰지 않는다
+        let tail = [link(1, 200.0, 0.0, 0.0), link(1, 10.0, 180.0, 180.0)];
+        assert_eq!(turn_points(&tail)[0].turn, Turn::UTurn);
+    }
+
+    #[test]
+    fn exits_merges_and_bridged_loops() {
+        let link = |name, length, start, end, ramp, bridged| LinkHeading {
+            name,
+            length,
+            start,
+            end,
+            ramp,
+            bridged,
+        };
+        // 본선 1에서 램프 2로 8° 갈라져 나가고(출구), 램프가 회차 통행으로 본선 3에 이어지며, 본선 3에서 램프 4로 합류 없이 30° 들어간 뒤 본선 5로 합류
+        let links = [
+            link(1, 500.0, 180.0, 180.0, false, false),
+            link(2, 400.0, 188.0, 240.0, true, false),
+            link(3, 600.0, 90.0, 90.0, false, true),
+            link(4, 300.0, 120.0, 100.0, true, false),
+            link(5, 500.0, 95.0, 95.0, false, false),
+        ];
+        let turns: Vec<(usize, Turn, u16)> = turn_points(&links)
+            .into_iter()
+            .map(|t| (t.link, t.turn, t.to_name))
+            .collect();
+        // 1→2는 우측 출구이고 뒤 도로명은 램프 뒤 본선 3, 2→3은 램프 회차라 안내하지 않고, 3→4는 우측 출구, 4→5는 합류라 안내하지 않는다
+        assert_eq!(turns, [(0, Turn::ExitRight, 3), (2, Turn::ExitRight, 5)]);
+        // 램프에서 램프로 30° 꺾이며 이름이 바뀌어도 안내하지 않고, 본선에서 본선으로 30° 꺾이며 이름이 바뀌면 우측 방향이다
+        let ramps = [
+            link(1, 500.0, 0.0, 0.0, true, false),
+            link(2, 500.0, 30.0, 30.0, true, false),
+            link(3, 500.0, 30.0, 30.0, false, false),
+            link(4, 500.0, 60.0, 60.0, false, false),
+        ];
+        let turns: Vec<(usize, Turn)> = turn_points(&ramps)
+            .into_iter()
+            .map(|t| (t.link, t.turn))
+            .collect();
+        assert_eq!(turns, [(2, Turn::SlightRight)]);
+        // 본선에서 회차 통행으로 반대 방향 본선에 이어지면 유턴이다
+        let uturn = [
+            link(1, 500.0, 0.0, 0.0, false, false),
+            link(1, 500.0, 180.0, 180.0, false, true),
+        ];
+        assert_eq!(turn_points(&uturn)[0].turn, Turn::UTurn);
+    }
 
     #[test]
     fn merge_same_names() {

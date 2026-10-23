@@ -118,6 +118,26 @@ fn main() {
         .filter(|p| p.kind == PoiKind::Bump)
         .count();
     println!("카메라 {} 방지턱 {}", cameras.len(), bumps);
+    println!("안내 지점 {}", route.steps.len());
+    let name_or = |name: &str| {
+        if name.is_empty() {
+            "(이름 없음)".to_string()
+        } else {
+            name.to_string()
+        }
+    };
+    for step in route.steps.iter() {
+        println!(
+            "  {:.0}m {:?} {:.0}° {} → {} ({:.6}, {:.6})",
+            step.at_m,
+            step.turn,
+            step.angle,
+            name_or(&step.from_name),
+            name_or(&step.to_name),
+            step.lat,
+            step.lon
+        );
+    }
     println!("도로명 구간 {}", route.segments.len());
     for seg in route.segments.iter().take(12) {
         let name = if seg.name.is_empty() {

@@ -10,7 +10,7 @@ use crate::linegraph::LineGraph;
 
 /// 그래프 파일 맨 앞 8바이트
 pub const MAGIC: &[u8; 8] = b"ROUTEDB\0";
-pub const VERSION: u32 = 9;
+pub const VERSION: u32 = 10;
 /// MAGIC 8 + VERSION 4 + 빈칸 4 + 교차로 수 8 + 간선 수 8 + 링크 좌표 수 8 + 통행 수 8 + 경유 링크 수 8 + 영업소코드 수 8 + 지점 수 8
 /// + 도로명 수 8 + 도로명 바이트 수 8
 pub const HEADER_LEN: usize = 88;
@@ -18,7 +18,7 @@ pub const HEADER_LEN: usize = 88;
 impl Graph {
     /// 그래프와 line graph를 헤더, 8바이트 배열(node_id, link_id, length, lat, lon, geom_lat, geom_lon, turn_weight),
     /// 4바이트 배열(first_out, head, geom_first, turn_first_out, turn_head, via_first, via, toll_first, toll_unit, poi_first, poi_id),
-    /// 2바이트 배열(rest_w, rest_h, max_spd, poi_at), 1바이트 배열(rest_veh, road_rank, poi_kind, poi_limit, poi_enforce) 순서로 파일에 저장한다.
+    /// 2바이트 배열(rest_w, rest_h, max_spd, poi_at), 1바이트 배열(rest_veh, road_rank, ramp, poi_kind, poi_limit, poi_enforce, name_bytes) 순서로 파일에 저장한다.
     pub fn write(&self, line: &LineGraph, path: &Path) -> Result<()> {
         let mut w = BufWriter::new(File::create(path)?);
 
@@ -75,6 +75,7 @@ impl Graph {
         w.write_all(bytemuck::cast_slice(&self.road_name))?;
         w.write_all(&self.rest_veh)?;
         w.write_all(&self.road_rank)?;
+        w.write_all(&self.ramp)?;
         w.write_all(&self.poi_kind)?;
         w.write_all(&self.poi_limit)?;
         w.write_all(&self.poi_enforce)?;
@@ -97,7 +98,7 @@ pub struct GraphFile {
     name_count: usize,
     name_byte_count: usize,
     /// 배열별 파일 내 위치
-    ranges: [Range<usize>; 31],
+    ranges: [Range<usize>; 32],
 }
 
 impl GraphFile {
@@ -156,6 +157,7 @@ impl GraphFile {
             2 * edge_count,       // road_name
             edge_count,           // rest_veh
             edge_count,           // road_rank
+            edge_count,           // ramp
             poi_count,            // poi_kind
             poi_count,            // poi_limit
             poi_count,            // poi_enforce
@@ -353,19 +355,24 @@ impl GraphFile {
         &self.mmap[self.ranges[26].clone()]
     }
 
+    /// 간선마다 연결로 여부. 1이 램프
+    pub fn ramp(&self) -> &[u8] {
+        &self.mmap[self.ranges[27].clone()]
+    }
+
     /// 지점마다 종류. 1 카메라, 2 방지턱
     pub fn poi_kind(&self) -> &[u8] {
-        &self.mmap[self.ranges[27].clone()]
+        &self.mmap[self.ranges[28].clone()]
     }
 
     /// 지점마다 카메라 제한속도(km/h). 0은 없음
     pub fn poi_limit(&self) -> &[u8] {
-        &self.mmap[self.ranges[28].clone()]
+        &self.mmap[self.ranges[29].clone()]
     }
 
     /// 지점마다 카메라 단속구분 비트. 방지턱은 1이 연속형이다
     pub fn poi_enforce(&self) -> &[u8] {
-        &self.mmap[self.ranges[29].clone()]
+        &self.mmap[self.ranges[30].clone()]
     }
 
     /// 간선 e의 지점 번호 범위
@@ -385,7 +392,7 @@ impl GraphFile {
 
     /// 도로명을 UTF-8로 이어 붙인 바이트
     pub fn name_bytes(&self) -> &[u8] {
-        &self.mmap[self.ranges[30].clone()]
+        &self.mmap[self.ranges[31].clone()]
     }
 
     /// k번 도로명
@@ -435,6 +442,7 @@ mod tests {
         links[4].rest_veh = 4;
         links[4].max_spd = 30;
         links[4].road_rank = 104;
+        links[4].ramp = true;
         Graph::build(&nodes, &links).0
     }
 
@@ -512,6 +520,8 @@ mod tests {
         assert_eq!(f.rest_veh(), g.rest_veh.as_slice());
         assert_eq!(f.max_spd(), g.max_spd.as_slice());
         assert_eq!(f.road_rank(), g.road_rank.as_slice());
+        assert_eq!(f.ramp(), g.ramp.as_slice());
+        assert_eq!(f.ramp().iter().filter(|&&r| r == 1).count(), 1);
         assert_eq!(f.poi_count(), 2);
         assert_eq!(f.poi_first(), g.poi_first.as_slice());
         assert_eq!(

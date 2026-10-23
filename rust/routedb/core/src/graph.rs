@@ -49,6 +49,8 @@ pub struct LinkInput {
     pub road_rank: u8,
     /// 도로명 ROAD_NAME. 없으면 빈 문자열
     pub road_name: String,
+    /// 연결로 여부 CONNECT. 램프이면 true
+    pub ramp: bool,
 }
 
 impl LinkInput {
@@ -66,6 +68,7 @@ impl LinkInput {
             max_spd: 60,
             road_rank: 107,
             road_name: String::new(),
+            ramp: false,
         }
     }
 }
@@ -123,6 +126,8 @@ pub struct Graph {
     pub max_spd: Vec<u16>,
     /// 간선마다 도로등급
     pub road_rank: Vec<u8>,
+    /// 간선마다 연결로 여부. 1이 램프
+    pub ramp: Vec<u8>,
     /// 간선마다 지점이 시작하는 번호. 간선 e의 지점은 poi_first[e]번부터 poi_first[e + 1]번 전까지이며 링크 안 위치 순서이다.
     pub poi_first: Vec<u32>,
     pub poi_id: Vec<u32>,
@@ -215,6 +220,7 @@ impl Graph {
             rest_veh: edges.iter().map(|e| e.2.rest_veh).collect(),
             max_spd: edges.iter().map(|e| e.2.max_spd).collect(),
             road_rank: edges.iter().map(|e| e.2.road_rank).collect(),
+            ramp: edges.iter().map(|e| e.2.ramp as u8).collect(),
             poi_first: vec![0; edges.len() + 1],
             poi_id: Vec::new(),
             poi_at: Vec::new(),
