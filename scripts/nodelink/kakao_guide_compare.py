@@ -5,6 +5,7 @@
 - 카카오 회전 안내(좌·우회전, 좌·우측 방향, 시 방향, 고속도로 출·입구)마다 40m 안에 routedb 안내가 있는지, 좌·우가 같은지
 - routedb 회전 안내(직진 제외)마다 40m 안에 카카오 안내가 있는지
 - 12시 방향, 톨게이트, 고가·지하차도 진입 같은 카카오 정보 안내는 회전 안내로 세지 않는다
+- 분기 4개 이상이라 시계 방향으로 안내한 routedb 안내 지점마다 노드 이름과 40m 안의 카카오 안내
 
 먼저 cargo build --release -p importer-knl --example route_cli
 python -X utf8 scripts/nodelink/kakao_guide_compare.py
@@ -23,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tollroad"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import env
-from nodelink import TM, WGS84, read_links, wgs84_to_tm
+from nodelink import TM, WGS84, read_links, read_nodes, wgs84_to_tm
 import kakao_route_compare as krc
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -78,7 +79,8 @@ def routedb(links, a, b):
         if on:
             t = l.strip()
             lat, lon = t[t.rfind("(") + 1:-1].split(", ")
-            steps.append((Point(*wgs84_to_tm(float(lat), float(lon))), t.split()[1], t[: t.rfind("(")].strip()))
+            steps.append((Point(*wgs84_to_tm(float(lat), float(lon))), t.split()[1], t[: t.rfind("(")].strip(),
+                          "시 방향" in t))
     return dist, line, steps
 
 
@@ -93,6 +95,9 @@ def kakao_side(t):
 def main():
     key = env("KAKAO_REST_API_KEY")
     links = read_links(["LINK_ID", "ROAD_RANK"]).set_index("LINK_ID")
+    nodes = read_nodes(["NODE_ID", "NODE_NAME"])
+    node_index = nodes.sindex
+    clocks = []
     pairs = [("서울역→강남역", (37.5547, 126.9707), (37.4979, 127.0276)),
              ("서울역→부산역", (37.5547, 126.9707), (35.1151, 129.0422))]
     pairs += [(f"무작위 {i + 1}", a, b) for i, (a, b) in enumerate(krc.pairs(links.reset_index()))]
@@ -140,12 +145,21 @@ def main():
               f"{len([s for s in osteps if s[1] != 'Straight'])} 겹침 {len(o_shared)} 카카오 안내 있음 {o_matched}")
         for n in notes:
             print("   ", n)
+        for s in osteps:
+            if s[3]:
+                i = list(node_index.nearest(s[0], return_all=False))[1][0]
+                node = nodes.iloc[i]["NODE_NAME"] if nodes.iloc[i].geometry.distance(s[0]) < 2 else "-"
+                near = [g[2] for g in kguides if s[0].distance(g[0]) <= MATCH]
+                clocks.append(f"{name} | {s[2]} | 노드 {node} | 카카오 {near}")
         total["kakao_shared"] += len(k_shared)
         total["kakao_matched"] += k_matched
         total["kakao_same_side"] += k_same
         total["ours_shared"] += len(o_shared)
         total["ours_matched"] += o_matched
     print("합계", total)
+    print("시계 방향 안내", len(clocks))
+    for c in clocks:
+        print("   ", c)
 
 
 if __name__ == "__main__":

@@ -9,9 +9,11 @@ use crate::hierarchy;
 use crate::linegraph;
 use crate::profile;
 use crate::snap::{LinkIndex, Snap};
+use serde::{Deserialize, Serialize};
 
 /// 가중치 프로파일
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Profile {
     /// 거리
     Distance,
@@ -22,7 +24,8 @@ pub enum Profile {
 }
 
 /// 경로 위 지점의 종류
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PoiKind {
     /// 무인교통단속카메라
     Camera,
@@ -31,7 +34,7 @@ pub enum PoiKind {
 }
 
 /// 경로 위 지점. at_m은 출발점부터의 거리이다.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RoutePoi {
     pub kind: PoiKind,
     /// 카메라번호 또는 방지턱 지점번호
@@ -46,14 +49,15 @@ pub struct RoutePoi {
 }
 
 /// 경로 위 구간. 출발점부터의 시작·끝 거리이다.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Section {
     pub from_m: f64,
     pub to_m: f64,
 }
 
 /// 회전 방향. 각도는 진행 방향 기준이며 시계 방향이 양수이다.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Turn {
     /// |각도| < 20°
     Straight,
@@ -71,7 +75,7 @@ pub enum Turn {
 }
 
 /// 안내 지점. 출발점부터의 거리와 회전 방향, 들어가는 도로명이다.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Step {
     pub at_m: f64,
     /// 안내 지점의 위경도. 앞 링크의 끝점이다
@@ -84,12 +88,42 @@ pub struct Step {
     pub from_name: String,
     /// 안내 후 도로명
     pub to_name: String,
+    /// 들어가는 도로의 도로등급. 램프로 들어가면 램프 뒤 본선의 도로등급
+    pub to_rank: u8,
+    /// 들어가는 도로의 안내 표지 색
+    pub sign: SignColor,
+    /// 교차로에서 나갈 수 있는 분기 수. 돌아가는 방향은 세지 않는다
+    pub branches: u8,
+    /// 분기가 BRANCHES_FOR_CLOCK 이상이면 시계 방향(1~12시)
+    pub clock: Option<u8>,
+}
+
+/// 시계 방향으로 안내하는 최소 분기 수
+pub const BRANCHES_FOR_CLOCK: u8 = 4;
+
+/// 안내 표지의 바탕색. 도로표지규칙 제8조에 따라 고속국도·일반국도·자동차전용도로는 녹색, 그 밖의 도시지역 도로는 청색이다
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SignColor {
+    Green,
+    Blue,
+}
+
+/// 들어가는 도로의 도로등급으로 표지 색을 정한다. 101 고속국도, 102 도시고속국도, 103 일반국도는 녹색, 그 밖은 청색
+pub fn sign_color(road_rank: u8) -> SignColor {
+    if (101..=103).contains(&road_rank) {
+        SignColor::Green
+    } else {
+        SignColor::Blue
+    }
 }
 
 /// 회전 방향을 정할 때 쓰는 링크의 도로명 번호, 길이, 시작·끝 방위각(°, 북 0, 동 90)
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LinkHeading {
     pub name: u16,
+    /// 도로등급 ROAD_RANK
+    pub rank: u8,
     pub length: f64,
     pub start: f64,
     pub end: f64,
@@ -107,6 +141,8 @@ pub struct TurnPoint {
     pub turn: Turn,
     pub from_name: u16,
     pub to_name: u16,
+    /// 들어가는 도로의 도로등급. 램프로 들어가면 램프 뒤 본선의 도로등급
+    pub to_rank: u8,
 }
 
 /// 교차로 안 짧은 링크로 보는 길이(m). 이보다 짧은 링크는 회전 방향을 정하는 데 쓰지 않는다
@@ -119,6 +155,45 @@ pub fn turn_angle(a: f64, b: f64) -> f64 {
 }
 
 /// 각도로 회전 방향을 정한다.
+/// 진행 방향 변화를 시계 방향(1~12시)으로 바꾼다. 30°마다 한 시간이며 반올림한다
+pub fn clock_hour(angle: f64) -> u8 {
+    let hour = ((angle + 360.0) / 30.0).round() as u32 % 12;
+    if hour == 0 { 12 } else { hour as u8 }
+}
+
+/// 교차로 node에서 나가는 분기 수. SHORT_LINK_M보다 짧은 링크는 교차로 안 링크로 보고 그 끝에서 이어서 세며,
+/// 들어온 방향에서 150° 이상 돌아가는 링크는 세지 않는다. 회전 금지와 상관없이 도로가 있는 분기를 센다
+pub fn count_branches(
+    first_out: &[u32],
+    head: &[u32],
+    length: &[f64],
+    node: usize,
+    end_bearing: f64,
+    start_bearing_of: impl Fn(usize) -> f64,
+) -> u8 {
+    let mut n = 0;
+    let mut seen = vec![node];
+    let mut queue = vec![(node, 0usize)];
+    while let Some((v, depth)) = queue.pop() {
+        for e in first_out[v]..first_out[v + 1] {
+            let e = e as usize;
+            if turn_angle(end_bearing, start_bearing_of(e)).abs() >= 150.0 {
+                continue;
+            }
+            let w = head[e] as usize;
+            if length[e] < SHORT_LINK_M && depth < 3 {
+                if !seen.contains(&w) {
+                    seen.push(w);
+                    queue.push((w, depth + 1));
+                }
+            } else {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
 pub fn classify(angle: f64) -> Turn {
     let a = angle.abs();
     if a < 20.0 {
@@ -187,14 +262,12 @@ pub fn turn_points(links: &[LinkHeading]) -> Vec<TurnPoint> {
                 Some(classify(angle))
             };
             // 램프로 들어가면 안내하는 도로명은 램프 뒤에 처음 나오는 본선의 이름이다
-            let to_name = if l.ramp {
-                links[i..]
-                    .iter()
-                    .find(|x| !x.ramp)
-                    .map_or(l.name, |x| x.name)
+            let to = if l.ramp {
+                links[i..].iter().find(|x| !x.ramp).unwrap_or(l)
             } else {
-                l.name
+                l
             };
+            let to_name = to.name;
             // 램프에서 램프로 넘어갈 때는 도로명이 바뀌어도 안내하지 않는다
             let name_changed = !(links[p].ramp && l.ramp) && links[p].name != to_name;
             if let Some(turn) = turn {
@@ -206,6 +279,7 @@ pub fn turn_points(links: &[LinkHeading]) -> Vec<TurnPoint> {
                         turn,
                         from_name: links[p].name,
                         to_name,
+                        to_rank: to.rank,
                     });
                 }
             }
@@ -216,7 +290,7 @@ pub fn turn_points(links: &[LinkHeading]) -> Vec<TurnPoint> {
 }
 
 /// 같은 도로명이 이어지는 구간
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RoadSegment {
     /// 도로명. 없으면 빈 문자열
     pub name: String,
@@ -245,7 +319,7 @@ pub fn merge_runs(names: &[u16], lengths: &[f64]) -> Vec<(u16, f64, f64, usize)>
 }
 
 /// 경로
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Route {
     pub profile: Profile,
     pub from: Snap,
@@ -503,6 +577,7 @@ impl RouteDb {
             let (start, end) = end_bearings(&piece, 15.0);
             headings.push(LinkHeading {
                 name: file.road_name()[e],
+                rank: file.road_rank()[e],
                 length: part * length[e],
                 start,
                 end,
@@ -560,16 +635,31 @@ impl RouteDb {
             acc += p;
             ends.push(acc);
         }
+        let start_bearing_of = |x: usize| end_bearings(&self.edge_points(x), 15.0).0;
         let steps = turn_points(&headings)
             .into_iter()
-            .map(|t| Step {
-                at_m: ends[t.link],
-                lat: link_ends[t.link].0,
-                lon: link_ends[t.link].1,
-                turn: t.turn,
-                angle: t.angle,
-                from_name: file.name(t.from_name as usize).to_string(),
-                to_name: file.name(t.to_name as usize).to_string(),
+            .map(|t| {
+                let branches = count_branches(
+                    file.first_out(),
+                    file.head(),
+                    length,
+                    file.head()[edges[t.link] as usize] as usize,
+                    headings[t.link].end,
+                    start_bearing_of,
+                );
+                Step {
+                    at_m: ends[t.link],
+                    lat: link_ends[t.link].0,
+                    lon: link_ends[t.link].1,
+                    turn: t.turn,
+                    angle: t.angle,
+                    from_name: file.name(t.from_name as usize).to_string(),
+                    to_name: file.name(t.to_name as usize).to_string(),
+                    to_rank: t.to_rank,
+                    sign: sign_color(t.to_rank),
+                    branches,
+                    clock: (branches >= BRANCHES_FOR_CLOCK).then(|| clock_hour(t.angle)),
+                }
             })
             .collect();
         let segments = merge_runs(&names, &parts)
@@ -607,6 +697,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sign_colors() {
+        assert_eq!(sign_color(101), SignColor::Green);
+        assert_eq!(sign_color(102), SignColor::Green);
+        assert_eq!(sign_color(103), SignColor::Green);
+        assert_eq!(sign_color(104), SignColor::Blue);
+        assert_eq!(sign_color(107), SignColor::Blue);
+    }
+
+    #[test]
+    fn clock_hours_and_branches() {
+        assert_eq!(clock_hour(0.0), 12);
+        assert_eq!(clock_hour(-10.0), 12);
+        assert_eq!(clock_hour(30.0), 1);
+        assert_eq!(clock_hour(-30.0), 11);
+        assert_eq!(clock_hour(90.0), 3);
+        assert_eq!(clock_hour(-100.0), 9);
+        assert_eq!(clock_hour(175.0), 6);
+        // 북쪽으로 들어온 교차로 0에서 왼쪽(270°) 100m, 되돌아가는 링크(180°), 20m 교차로 안 링크(0°)로 교차로 1에 가고
+        // 교차로 1에서 직진(0°) 100m, 오른쪽(90°) 100m, 되돌아가는 링크(180°)
+        let first_out = [0u32, 3, 6, 6, 6, 6];
+        let head = [2u32, 3, 1, 4, 5, 0];
+        let length = [100.0, 100.0, 20.0, 100.0, 100.0, 20.0];
+        let bearing = [270.0, 180.0, 0.0, 0.0, 90.0, 180.0];
+        assert_eq!(
+            count_branches(&first_out, &head, &length, 0, 0.0, |x| bearing[x]),
+            3
+        );
+        // 교차로 1에서 바로 세면 직진과 오른쪽 2개
+        assert_eq!(
+            count_branches(&first_out, &head, &length, 1, 0.0, |x| bearing[x]),
+            2
+        );
+    }
+
+    #[test]
     fn turn_angles_and_classes() {
         assert_eq!(turn_angle(350.0, 10.0), 20.0);
         assert_eq!(turn_angle(10.0, 350.0), -20.0);
@@ -631,6 +756,7 @@ mod tests {
     fn turn_points_skip_short_links() {
         let link = |name, length, start, end| LinkHeading {
             name,
+            rank: 107,
             length,
             start,
             end,
@@ -668,6 +794,7 @@ mod tests {
     fn exits_merges_and_bridged_loops() {
         let link = |name, length, start, end, ramp, bridged| LinkHeading {
             name,
+            rank: if ramp { 101 } else { name as u8 + 100 },
             length,
             start,
             end,
@@ -682,12 +809,15 @@ mod tests {
             link(4, 300.0, 120.0, 100.0, true, false),
             link(5, 500.0, 95.0, 95.0, false, false),
         ];
-        let turns: Vec<(usize, Turn, u16)> = turn_points(&links)
+        let turns: Vec<(usize, Turn, u16, u8)> = turn_points(&links)
             .into_iter()
-            .map(|t| (t.link, t.turn, t.to_name))
+            .map(|t| (t.link, t.turn, t.to_name, t.to_rank))
             .collect();
-        // 1→2는 우측 출구이고 뒤 도로명은 램프 뒤 본선 3, 2→3은 램프 회차라 안내하지 않고, 3→4는 우측 출구, 4→5는 합류라 안내하지 않는다
-        assert_eq!(turns, [(0, Turn::ExitRight, 3), (2, Turn::ExitRight, 5)]);
+        // 1→2는 우측 출구이고 뒤 도로명과 도로등급은 램프 뒤 본선 3의 것, 2→3은 램프 회차라 안내하지 않고, 3→4는 우측 출구, 4→5는 합류라 안내하지 않는다
+        assert_eq!(
+            turns,
+            [(0, Turn::ExitRight, 3, 103), (2, Turn::ExitRight, 5, 105)]
+        );
         // 램프에서 램프로 30° 꺾이며 이름이 바뀌어도 안내하지 않고, 본선에서 본선으로 30° 꺾이며 이름이 바뀌면 우측 방향이다
         let ramps = [
             link(1, 500.0, 0.0, 0.0, true, false),

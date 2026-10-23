@@ -1,4 +1,5 @@
 use rstar::{AABB, PointDistance, RTree, RTreeObject};
+use serde::Serialize;
 
 /// 위도 1도의 길이(m)
 const M_PER_LAT: f64 = 111_320.0;
@@ -54,7 +55,7 @@ impl PointDistance for Segment {
 }
 
 /// 스냅 결과
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Snap {
     /// 가장 가까운 간선 번호
     pub edge: u32,

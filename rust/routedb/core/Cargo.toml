@@ -8,3 +8,4 @@ bytemuck = "1.25.2"
 cch = "0.3.0"
 memmap2 = "0.9.11"
 rstar = "0.13.0"
+serde = { version = "1.0.229", features = ["derive"] }

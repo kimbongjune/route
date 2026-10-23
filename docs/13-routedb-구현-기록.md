@@ -30,6 +30,8 @@ rust/
     route_cli.rs            위경도 두 쌍과 프로파일을 받아 RouteDb로 경로, 거리, 시간, 영업소, 통과제한, 지점, 안내 지점, 도로명 구간 출력
     routes_batch.rs         위경도 쌍 CSV를 받아 프로파일별 경로의 링크 열 출력
     cch_bench.rs            line graph CCH build, customize, query 시간과 다익스트라 대조
+  nav/api/src/
+    main.rs                 axum 서버. RouteDb를 Arc로 공유하고 POST /route로 Route를 JSON으로 반환
 ```
 
 ## 크레이트
@@ -41,6 +43,8 @@ rust/
 | `bytemuck` 1.25 | 배열과 바이트 상호 변환 | 배열을 복사 없이 바이트로 기록하고 mmap 바이트를 다시 배열로 변환한다 |
 | `memmap2` 0.9 | 그래프 파일 mmap | 파일을 읽지 않고 메모리에 연결만 하므로 295MB 파일을 5ms에 연다 |
 | `rstar` 0.13 | 링크 선분 R-tree | 순수 Rust 구현이며 선분처럼 직접 정의한 도형을 넣을 수 있고 `bulk_load`로 1,023만 개를 4.6초에 만든다 |
+| `serde` 1.0, `serde_json` 1.0 | Route 타입의 JSON 직렬화 | `Route`, `Step`, `RoutePoi` 등에 `Serialize`를 derive하여 별도 변환 코드 없이 응답을 만든다 |
+| `axum` 0.8, `tokio` 1.54 | 내비 API 서버 | tokio 위에서 동작하는 HTTP 프레임워크이며 핸들러 인자로 상태와 JSON 본문을 받고 `Arc` 상태 공유가 `with_state` 하나로 된다 |
 | `cch` 0.3 | Customizable Contraction Hierarchies | 순수 Rust로 RoutingKit을 옮긴 구현이며 CSR 입력, 방향별 가중치, rayon 병렬 customize, mmap 번들 저장을 갖추었다 |
 
 그래프 라이브러리 `petgraph`는 자체 그래프 타입으로 데이터를 복사해야 하므로 mmap 배열을 그대로 사용할 수 없고, 직렬화 라이브러리 `serde`와 `bincode`는 파일 전체를 읽어 구조체를 생성하는 방식이라 mmap과 맞지 않아 사용하지 않았다.
@@ -368,7 +372,7 @@ CCH 구조는 세 프로파일이 같고 metric만 다르므로 임포터가 거
 | `tolls` | 지나는 요금소의 영업소코드. 바로 앞 링크에도 있던 영업소코드는 같은 요금소라 한 번만 |
 | `pois` | 경로 위 카메라와 방지턱. 종류, 번호, 출발점부터의 거리, 위경도, 제한속도, 단속구분. 불법주정차만 단속하는 카메라는 뺀다 |
 | `segments` | 같은 도로명이 이어지는 구간. 도로명, 시작·끝 거리, 링크 수 |
-| `steps` | 안내 지점. 출발점부터의 거리, 위경도, 회전 방향, 각도, 앞뒤 도로명 |
+| `steps` | 안내 지점. 출발점부터의 거리, 위경도, 회전 방향, 각도, 앞뒤 도로명, 교차로의 분기 수, 분기가 4개 이상일 때의 시계 방향, 들어가는 도로의 도로등급과 표지 색 |
 | `school_zones` | 스쿨존 구간. 데이터를 적재하기 전까지 비어 있다 |
 | `min_height_cm`, `min_weight_kg`, `rest_veh` | 경로 링크의 통과제한 높이·하중 최솟값과 통행제한차량 코드 |
 
@@ -449,7 +453,30 @@ CCH 구조는 세 프로파일이 같고 metric만 다르므로 임포터가 거
 | 카카오 안내 기준 | 116 | 77 | 77 |
 | routedb 안내 기준 | 100 | 78 | |
 
-도로명만 바뀌는 직진과 같은 도로명에서 50° 미만으로 꺾이는 곳을 안내하던 때에는 그런 안내에 카카오 안내가 없는 것이 많아 두 규칙을 뺐다. 카카오가 안내하고 routedb가 안내하지 않는 곳은 분기의 "왼쪽 직진·오른쪽 직진", 회전교차로의 시 방향, 분기 시작점에 두는 고속도로 출구이며, 출구는 routedb가 링크 끝 노드에 두므로 40m를 넘는 경우가 있다. 고속도로 분기점 위치는 카카오와 같다. 반포IC에서 신갈JC까지와 김천JC에서 동대구JC까지의 구간 길이가 카카오와 수십 m 안에서 일치한다. 분기가 4개 이상인 교차로의 시계 방향 안내는 다음 항목에서 추가할 예정이다.
+도로명만 바뀌는 직진과 같은 도로명에서 50° 미만으로 꺾이는 곳을 안내하던 때에는 그런 안내에 카카오 안내가 없는 것이 많아 두 규칙을 뺐다. 카카오가 안내하고 routedb가 안내하지 않는 곳은 분기의 "왼쪽 직진·오른쪽 직진", 회전교차로의 시 방향, 분기 시작점에 두는 고속도로 출구이며, 출구는 routedb가 링크 끝 노드에 두므로 40m를 넘는 경우가 있다. 고속도로 분기점 위치는 카카오와 같다. 반포IC에서 신갈JC까지와 김천JC에서 동대구JC까지의 구간 길이가 카카오와 수십 m 안에서 일치한다.
+
+### 시계 방향 안내
+
+오거리처럼 분기가 많은 교차로에서는 좌·우회전만으로는 어느 길인지 정해지지 않으므로 분기가 4개 이상이면 시계 방향으로 안내한다. `count_branches`가 안내 지점의 교차로에서 나가는 링크를 세는데, `SHORT_LINK_M` 30m보다 짧은 링크는 교차로 안 링크로 보고 그 끝 교차로에서 이어서 세며(깊이 3까지), 들어온 방향에서 150° 이상 돌아가는 링크는 세지 않는다. 회전 금지와 상관없이 도로가 있는 분기를 세므로 통행 표가 아니라 간선 배열 `first_out`, `head`, `length`를 사용한다. 사거리는 분기가 3개, 오거리는 4개이다. `clock_hour`는 진행 방향 변화를 30°마다 한 시간으로 반올림하여 1~12시로 바꾸며 `Step`의 `branches`에 분기 수, `clock`에 분기가 `BRANCHES_FOR_CLOCK` 4개 이상일 때의 시계 방향을 넣는다.
+
+처음에는 통행 표 `turn_first_out`, `turn_head`로 안내 지점의 간선에서 갈 수 있는 간선을 세었는데, 교차로 그룹에 묶이지 않은 25m 넘는 교차로 안 링크가 있으면 그 링크 하나만 세어져 거리공원오거리와 공덕오거리가 분기 2~3개로 나왔다. 교차로 안 링크를 따라가며 세도록 수정한 뒤 `kakao_guide_compare.py`의 22쌍에서 시계 방향 안내는 11곳이고, 노드 이름이 복현오거리, 공덕오거리, 삼성오거리, 디지털단지오거리, 연남교앞교차로(분기 5), 주례교차로, 오류동교차로, 공고네거리, 금능교차로 등이다. 카카오 안내가 40m 안에 있는 3곳 중 공덕오거리는 카카오도 왼쪽 10시 방향이고, 복현오거리는 카카오가 오른쪽 2시 방향인데 routedb는 37°를 반올림한 1시 방향이며, 금능교차로는 카카오가 우회전이고 routedb는 92°의 3시 방향이다. 서울역에서 강남역까지와 서울역에서 부산역까지 거리·최소시간 경로에는 분기 4개 이상인 안내 지점이 없고, 서울역에서 부산역까지 무료도로 경로에는 4곳이다.
+
+### 표지 색
+
+안내문에 표지와 같은 색을 쓰기 위해 안내 지점마다 들어가는 도로의 표지 바탕색을 정하였다. 도로표지규칙 제8조는 도로표지의 바탕색을 녹색으로 하되 도시지역 도로 중 고속국도·일반국도·자동차전용도로가 아닌 도로의 경계·이정·방향·노선표지는 청색으로 정하고 있다. 표준노드링크에는 도시지역 여부가 없으므로 도로등급 `ROAD_RANK`로 대신하여 101 고속국도, 102 도시고속국도, 103 일반국도는 녹색, 104 특별광역시도부터 108 기타까지는 청색으로 정하였다. 연결로코드가 1인 램프로 들어가는 안내는 램프 뒤에 처음 나오는 본선의 도로등급으로 정하므로 경부고속도로로 들어가는 램프는 녹색, 고속도로에서 시도로 나가는 램프는 청색이다. `LinkHeading`에 도로등급 `rank`를 더하고 `turn_points`가 뒤 도로명과 같은 방식으로 뒤 도로등급 `to_rank`를 정하며, `sign_color`가 이를 `SignColor`의 `Green`, `Blue`로 바꾸어 `Step`의 `sign`에 넣는다. 서울역에서 강남역까지는 안내 지점 7개가 모두 특별광역시도로 들어가 청색이고, 서울역에서 부산역까지 최소시간 경로는 반포IC에서 경부고속도로로 들어가는 우측 출구부터 동대구JC까지 6개가 녹색, 나머지 7개가 청색이다.
+
+## 내비 API
+
+`nav/api`는 routedb-core를 링크하여 `RouteDb`를 `Arc`로 갖고 있는 axum 서버이다. 시작할 때 그래프 폴더의 `moct.rdb`, `moct.cch-struct`, 프로파일별 metric 3개를 열어 `Arc<RouteDb>`를 `with_state`로 핸들러에 넘기며, `POST /route`는 출발·도착 위경도와 프로파일(distance, time, free, 없으면 distance)을 JSON으로 받아 `Route`를 JSON으로 반환한다. `Route`, `Snap`, `Step`, `RoutePoi`, `RoadSegment`, `Section`과 `Profile`, `PoiKind`, `Turn`, `SignColor`에 `serde`의 `Serialize`를 derive하여 응답을 별도 변환 없이 만들고, 열거형은 `distance`, `camera`, `exit_right`, `green`처럼 소문자로 직렬화한다. 경로 탐색은 CPU 작업이므로 `spawn_blocking`으로 블로킹 스레드에서 실행하며, `Router`가 CCH view를 빌리는 구조라 요청마다 `cch_view`와 `Router`를 새로 만든다. 경로가 없으면 404와 `{"error":"경로 없음"}`, 본문이나 프로파일이 잘못되면 axum이 422를 반환한다.
+
+| 요청 | 응답 |
+|---|---|
+| `{"from":{"lat":37.5547,"lon":126.9707},"to":{"lat":37.4979,"lon":127.0276}}` | 거리 10,063m, 링크 104개, 좌표 207개, 지점 13개, 구간 15개, 안내 지점 7개, 14,254바이트, 탐색 8ms |
+| 같은 출발에 `"to":{"lat":35.1151,"lon":129.0422},"profile":"time"` | 거리 398,564m, 링크 901개, 안내 지점 13개, 영업소 101·091·252·080, 탐색 9ms |
+| 출발 33.0, 126.0 | 404 |
+| `"profile":"fast"` | 422 |
+
+응답의 `elapsed_ms`는 스냅부터 `Route` 생성까지의 시간이며 `Router`를 재사용하는 경로 CLI의 1ms보다 긴 것은 요청마다 `PathQuery` 버퍼를 교차로 수만큼 할당하기 때문이다. 9단계에서 가중치 갱신 시 `Arc` 스왑 방식을 정할 때 `Router` 재사용 방식을 함께 정할 예정이다. `GET /geocode`, 사고다발 교차, 안내문은 다음 항목에서 추가할 예정이다.
 
 ## 코드 규약
 
@@ -561,7 +588,7 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 
 ## 테스트
 
-`cargo test --workspace`로 32개를 실행한다.
+`cargo test --workspace`로 34개를 실행한다.
 
 | 파일 | 테스트 | 확인 내용 |
 |---|---|---|
@@ -576,8 +603,10 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 | `graph.rs` | `road_name_table` | 같은 도로명 링크 두 개가 한 번호, 이름 없는 링크는 0번 |
 | `route.rs` | `merge_same_names` | 도로명 1, 1, 2, 1, 1 링크 5개가 구간 3개, 빈 입력은 빈 결과 |
 | `route.rs` | `turn_angles_and_classes` | 350°→10°가 20°, 90°→270°가 180°, 각도별 회전 방향, 북·동으로 가는 선의 방위각 0°·90° |
+| `route.rs` | `sign_colors` | 101·102·103은 녹색, 104·107은 청색 |
+| `route.rs` | `clock_hours_and_branches` | 0°·-10°가 12시, 30°가 1시, -30°가 11시, 175°가 6시, 20m 교차로 안 링크 너머까지 센 분기 3개와 되돌아가는 링크 제외 |
 | `route.rs` | `turn_points_skip_short_links` | 12m 교차로 링크를 건너뛴 우회전 90°, 같은 도로의 30° 꺾임과 도로명만 바뀌는 직진은 안내 없음, 도로명이 바뀌는 30° 꺾임은 우측 방향, 짧은 도착 링크의 유턴 |
-| `route.rs` | `exits_merges_and_bridged_loops` | 본선에서 램프로 8°·30° 갈라지는 우측 출구와 램프 뒤 본선의 도로명, 램프 회차와 합류는 안내 없음, 램프끼리 30° 꺾이며 이름이 바뀌어도 안내 없음, 본선의 건너가는 통행은 유턴 |
+| `route.rs` | `exits_merges_and_bridged_loops` | 본선에서 램프로 8°·30° 갈라지는 우측 출구와 램프 뒤 본선의 도로명·도로등급, 램프 회차와 합류는 안내 없음, 램프끼리 30° 꺾이며 이름이 바뀌어도 안내 없음, 본선의 건너가는 통행은 유턴 |
 | `route.rs` | `sub_polyline_and_point_at` | 꺾인 선 200m의 25~75% 부분 잘라내기, 150m 지점 보간, 길이를 넘는 지점은 끝점 |
 | `hilbert.rs` | `order1`, `next_index_is_neighbor_cell` | 2×2 순서, 순번이 이어지는 칸끼리 인접 |
 | `dijkstra.rs` | `shortest_from_ga_to_ma`, `unreachable`, `same_node` | 더 짧은 경로 선택, 경로 없음, 출발과 도착이 같음 |
@@ -606,6 +635,8 @@ cargo run --release -p importer-knl --example route_cli -- 37.5547 126.9707 37.4
 cargo run --release -p importer-knl --example route_cli -- 37.5547 126.9707 35.1152 129.0422 free
 cargo run --release -p importer-knl --example routes_batch -- pairs.csv free
 cargo run --release -p importer-knl --example cch_bench
+cargo run --release -p nav-api
+curl -X POST http://127.0.0.1:3000/route -H "Content-Type: application/json" -d '{"from":{"lat":37.5547,"lon":126.9707},"to":{"lat":37.4979,"lon":127.0276},"profile":"time"}'
 python -X utf8 scripts/nodelink/turninfo_check.py
 python -X utf8 scripts/nodelink/uturn_rule_check.py
 python -X utf8 scripts/nodelink/kakao_route_compare.py

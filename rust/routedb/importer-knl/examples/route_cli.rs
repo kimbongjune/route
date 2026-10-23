@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use routedb_core::route::{PoiKind, Profile, RouteDb};
+use routedb_core::route::{PoiKind, Profile, RouteDb, SignColor};
 
 const GRAPH_FILE_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.rdb";
 const CCH_STRUCT_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-struct";
@@ -127,13 +127,24 @@ fn main() {
         }
     };
     for step in route.steps.iter() {
+        let clock = match step.clock {
+            Some(h) => format!(" {}시 방향 분기 {}", h, step.branches),
+            None => format!(" 분기 {}", step.branches),
+        };
+        let sign = match step.sign {
+            SignColor::Green => "녹색",
+            SignColor::Blue => "청색",
+        };
         println!(
-            "  {:.0}m {:?} {:.0}° {} → {} ({:.6}, {:.6})",
+            "  {:.0}m {:?} {:.0}°{} {} → {} {} {} ({:.6}, {:.6})",
             step.at_m,
             step.turn,
             step.angle,
+            clock,
             name_or(&step.from_name),
             name_or(&step.to_name),
+            step.to_rank,
+            sign,
             step.lat,
             step.lon
         );
