@@ -1,6 +1,5 @@
 mod coord;
 mod moct;
-mod rest_area;
 mod toll;
 
 use std::collections::HashMap;
@@ -23,22 +22,11 @@ const CCH_METRIC_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routed
 
 fn main() {
     let folder = Path::new(MOCT_SHPFILE_FOLDER_LOCATION);
-    let mut nodes = moct::read_nodes(folder);
-    let mut links = moct::read_links(folder);
+    let nodes = moct::read_nodes(folder);
+    let links = moct::read_links(folder);
     let node_types: HashMap<u64, u16> = moct::read_node_types(folder).into_iter().collect();
     let turns = moct::read_turns(folder);
     println!("회전정보 {}", turns.len());
-
-    // 휴게소 연결 링크를 추가하고 나눈 표준노드링크 링크는 조각으로 바꾼다
-    let rest_links = rest_area::read_rest_links(Path::new(rest_area::REST_LINKS_LOCATION));
-    let rest_nodes = rest_area::read_rest_nodes(Path::new(rest_area::REST_NODES_LOCATION));
-    let pieces = rest_area::piece_ends(&rest_links);
-    let before = links.len();
-    links.retain(|l| !pieces.contains_key(&l.id));
-    println!("휴게소 연결 노드 {} 링크 {} 나눈 표준노드링크 링크 {}", rest_nodes.len(), rest_links.len(), before - links.len());
-    nodes.extend(rest_nodes);
-    let rest_tolls: Vec<(u64, u32)> = rest_links.iter().filter_map(|r| Some((r.link.id, r.toll_unit?))).collect();
-    links.extend(rest_links.into_iter().map(|r| r.link));
 
     // 힐베르트 순서로 정렬하고 TM 좌표를 위경도로 변환
     let tm = TmToWgs84::new();
@@ -65,24 +53,20 @@ fn main() {
     println!("노드 {} 간선 {} 링크 좌표 {} 건너뛴 링크 {}", graph.node_count(), graph.edge_count(), graph.geom_count(), skipped);
 
     // 요금 지점 링크의 영업소코드
-    let mut tolls = toll::read_toll_links(Path::new(toll::TOLL_LINKS_LOCATION));
-    tolls.extend(rest_tolls);
+    let tolls = toll::read_toll_links(Path::new(toll::TOLL_LINKS_LOCATION));
     let missing = graph.set_tolls(&tolls);
     let toll_edges = (0..graph.edge_count()).filter(|&e| !graph.tolls_of(e).is_empty()).count();
     println!("요금 지점 행 {} 그래프에 없는 링크 행 {} 요금 지점 간선 {} 영업소코드 {}", tolls.len(), missing, toll_edges, graph.toll_unit.len());
 
     // 회전정보를 간선 번호의 회전 규칙으로 변환. 002, 003, 101, 102, 103은 금지, 011은 허용 U턴이다
-    // 나눈 링크는 진입 링크면 마지막 조각, 진출 링크면 첫 조각으로 바꾼다
     let edge_of: HashMap<u64, u32> = graph.link_id.iter().enumerate().map(|(e, &id)| (id, e as u32)).collect();
-    let st_link = |id: u64| pieces.get(&id).map_or(id, |p| p.1);
-    let ed_link = |id: u64| pieces.get(&id).map_or(id, |p| p.0);
-    let rule = |t: &moct::Turn| Some(TurnRule { st: *edge_of.get(&st_link(t.st_link))?, ed: *edge_of.get(&ed_link(t.ed_link))? });
+    let rule = |t: &moct::Turn| Some(TurnRule { st: *edge_of.get(&t.st_link)?, ed: *edge_of.get(&t.ed_link)? });
     let forbidden: Vec<TurnRule> = turns.iter().filter(|t| matches!(t.turn_type, 2 | 3 | 101 | 102 | 103)).filter_map(rule).collect();
     let uturn: Vec<TurnRule> = turns.iter().filter(|t| t.turn_type == 11).filter_map(rule).collect();
     println!("금지 회전 {} 허용 U턴 {}", forbidden.len(), uturn.len());
 
     // 교차로 그룹
-    let crossing: Vec<bool> = graph.node_id.iter().map(|id| node_types.get(id) == Some(&101)).collect();
+    let crossing: Vec<bool> = graph.node_id.iter().map(|id| node_types[id] == 101).collect();
     // 회전 규칙마다 진입 링크 도착 노드에서 진출 링크 출발 노드까지 5개 이하 링크 경로를 찾아 한 그룹으로 묶는다
     let tail = linegraph::tails(&graph.first_out);
     // 경로가 없는 허용 U턴은 진입 링크 끝에서 진출 링크 시작으로 바로 건너가는 통행으로 만든다

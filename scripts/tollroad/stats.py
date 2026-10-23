@@ -25,33 +25,23 @@ def main():
 
     f = read_csv(TOLLROAD_DIR / "유료도로_차종별요금.csv")
     print("유료도로_차종별요금", f"{len(f):,}행 도로", f.도로.nunique())
-    print("카카오 톨게이트", len(read_csv(TOLLROAD_DIR / "API_수집" / "카카오_톨게이트_전국.csv")))
-    print("국가관심지점 요금소", len(read_csv(TOLLROAD_DIR / "API_수집" / "국가관심지점_요금소.csv")))
-    km = read_csv(TOLLROAD_DIR / "영업소_카카오_매칭.csv")
-    print("영업소_카카오_매칭: 연결된 영업소", km.영업소코드[km.상태 == "연결"].nunique(), "/", km.영업소코드.nunique())
+    poi = read_csv(TOLLROAD_DIR / "API_수집" / "국가관심지점_요금소.csv")
+    print("국가관심지점 요금소", len(poi))
 
     pts = read_csv(TOLLROAD_DIR / "영업소_요금지점.csv")
-    codes = set(pts.영업소코드)
-    excl = set(pts.영업소코드[pts.기준 == "제외"])
-    print("영업소_요금지점:", len(pts), "행, 영업소", len(codes), "제외", len(excl), "요금 지점 있음", len(codes - excl))
-    print("  기준", pts.기준.value_counts().to_dict())
+    print("영업소_요금지점:", len(pts), "행, 영업소", pts.영업소코드.nunique())
+    print("  기준별 행", pts.기준.value_counts().to_dict())
+    print("  기준별 영업소", pts.groupby("기준").영업소코드.nunique().to_dict())
     moct = pts[pts.NODE_IDS != ""]
-    print("  MOCT 노드 기준 행", len(moct), "그중 카카오와 100m 안", (moct.검증 == "일치").sum(),
-          "검증 값", moct.검증.value_counts(sort=False).to_dict())
-    coord = pts[(pts.NODE_IDS == "") & ~pts.기준.isin(["제외", "없음"])]
-    near = coord.국가POI거리m.replace("", "999999").astype(int) <= 100
-    print("  좌표 기준 행(카카오·사용자·링크지정)", len(coord), "그중 국가 POI 100m 안", near.sum(), "국가 POI 100m 안에 없음", (~near).sum())
+    print("  MOCT 노드 기준 행", len(moct), "검증 값", moct.검증.value_counts().to_dict())
+    print("  없음 영업소", sorted(set(pts.영업소코드[pts.기준 == "없음"] + " " + pts.영업소명[pts.기준 == "없음"])))
 
     links = read_csv(TOLLROAD_DIR / "요금지점_링크.csv")
     with_link = set(links.영업소코드[links.LINK_ID != ""])
     no = links[links.LINK_ID == ""]
     print("요금지점_링크:", len(links), "행, 링크 있는 영업소", len(with_link), "링크 없는 영업소", sorted(set(no.영업소코드 + " " + no.영업소명)))
     print("  구간 처리 링크", links.영업소명[links.기준 == "구간"].value_counts(sort=False).to_dict())
-    rest = read_csv(TOLLROAD_DIR / "휴게소_연결링크.csv")
-    nodes = read_csv(TOLLROAD_DIR / "휴게소_연결노드.csv")
-    piece = rest.원본LINK_ID != ""
-    print("휴게소_연결링크", len(rest), "새 링크", (~piece).sum(), "조각", piece.sum(), "나눈 노드링크 링크", rest.원본LINK_ID[piece].nunique(),
-          "| 휴게소_연결노드", len(nodes), "| 영업소코드별 요금소 링크", rest.영업소코드[rest.영업소코드 != ""].value_counts(sort=False).to_dict())
+
 
 
 if __name__ == "__main__":
