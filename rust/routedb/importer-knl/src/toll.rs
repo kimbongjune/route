@@ -1,19 +1,27 @@
 use std::path::Path;
 
+use routedb_core::graph::TollInput;
+
 /// 요금지점_링크.csv 위치
-pub const TOLL_LINKS_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\유료도로\요금지점_링크.csv";
+pub const TOLL_LINKS_LOCATION: &str =
+    r"C:\Users\nocdu\Desktop\dev\route\maps\유료도로\요금지점_링크.csv";
 
 /// 요금지점_링크.csv에서 행별 LINK_ID와 영업소코드를 추출한다.
-pub fn read_toll_links(path: &Path) -> Vec<(u64, u32)> {
-    let mut reader = csv::Reader::from_path(path).unwrap();
-    let headers = reader.headers().unwrap().clone();
-    let col = |name: &str| headers.iter().position(|h| h.trim_start_matches('\u{feff}') == name).unwrap();
+pub fn read_toll_links(path: &Path) -> Vec<TollInput> {
+    let mut reader = csv::Reader::from_path(path).expect("CSV를 열 수 없음");
+    let headers = reader.headers().expect("CSV 머리글을 읽을 수 없음").clone();
+    let col = |name: &str| {
+        headers
+            .iter()
+            .position(|h| h.trim_start_matches('\u{feff}') == name)
+            .expect("CSV에 컬럼이 없음")
+    };
     let (unit_col, link_col) = (col("영업소코드"), col("LINK_ID"));
     let mut tolls = Vec::new();
     for record in reader.records() {
-        let record = record.unwrap();
+        let record = record.expect("CSV 행을 읽을 수 없음");
         if let (Ok(unit), Ok(link)) = (record[unit_col].parse(), record[link_col].parse()) {
-            tolls.push((link, unit));
+            tolls.push(TollInput::new(link, unit));
         }
     }
     tolls
@@ -27,6 +35,6 @@ mod tests {
     fn read_toll_link_rows() {
         let tolls = read_toll_links(Path::new(TOLL_LINKS_LOCATION));
         assert_eq!(tolls.len(), 4497);
-        assert!(tolls.contains(&(1410199400, 246)));
+        assert!(tolls.contains(&TollInput::new(1410199400, 246)));
     }
 }

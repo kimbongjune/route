@@ -24,7 +24,13 @@ impl PartialOrd for State {
 
 /// from 교차로에서 to 교차로까지 최단 경로를 찾는다.
 /// (총 길이, 지나간 간선 번호 목록, 방문한 교차로 수)를 반환하고 갈 수 없으면 None을 반환한다.
-pub fn shortest_path(first_out: &[u32], head: &[u32], length: &[f64], from: u32, to: u32) -> Option<(f64, Vec<usize>, usize)> {
+pub fn shortest_path(
+    first_out: &[u32],
+    head: &[u32],
+    length: &[f64],
+    from: u32,
+    to: u32,
+) -> Option<(f64, Vec<usize>, usize)> {
     let n = first_out.len() - 1;
     // 교차로마다 지금까지 찾은 최단 거리
     let mut dist = vec![f64::INFINITY; n];
@@ -34,7 +40,10 @@ pub fn shortest_path(first_out: &[u32], head: &[u32], length: &[f64], from: u32,
     let mut settled = 0;
 
     dist[from as usize] = 0.0;
-    heap.push(State { dist: 0.0, node: from });
+    heap.push(State {
+        dist: 0.0,
+        node: from,
+    });
 
     while let Some(State { dist: d, node: v }) = heap.pop() {
         if v == to {
@@ -80,15 +89,15 @@ fn tail_of(first_out: &[u32], e: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{Graph, LinkInput};
+    use crate::graph::{Graph, LinkInput, NodeInput};
 
     fn demo() -> Graph {
         let nodes = [
-            (1000000101, 37.000, 127.000),
-            (1000000201, 37.000, 127.001),
-            (1000000301, 37.001, 127.001),
-            (1000000401, 37.001, 127.000),
-            (1000000501, 37.002, 127.001),
+            NodeInput::new(1000000101, 37.000, 127.000),
+            NodeInput::new(1000000201, 37.000, 127.001),
+            NodeInput::new(1000000301, 37.001, 127.001),
+            NodeInput::new(1000000401, 37.001, 127.000),
+            NodeInput::new(1000000501, 37.002, 127.001),
         ];
         let links = [
             LinkInput::new(1000001000, 1000000101, 1000000201, 100.0), // 가 -> 나
@@ -121,6 +130,9 @@ mod tests {
     #[test]
     fn same_node() {
         let g = demo();
-        assert_eq!(shortest_path(&g.first_out, &g.head, &g.length, 2, 2), Some((0.0, vec![], 0)));
+        assert_eq!(
+            shortest_path(&g.first_out, &g.head, &g.length, 2, 2),
+            Some((0.0, vec![], 0))
+        );
     }
 }

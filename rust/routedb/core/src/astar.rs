@@ -35,7 +35,13 @@ pub fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 /// from 교차로에서 to 교차로까지 A*로 최단 경로를 탐색한다. 휴리스틱은 도착 교차로까지의 대원 거리이다.
 /// (총 길이, 경로의 간선 번호 목록, 방문한 교차로 수)를 반환하고 갈 수 없으면 None을 반환한다.
 pub fn shortest_path(
-    first_out: &[u32], head: &[u32], length: &[f64], lat: &[f64], lon: &[f64], from: u32, to: u32,
+    first_out: &[u32],
+    head: &[u32],
+    length: &[f64],
+    lat: &[f64],
+    lon: &[f64],
+    from: u32,
+    to: u32,
 ) -> Option<(f64, Vec<usize>, usize)> {
     let n = first_out.len() - 1;
     let (to_lat, to_lon) = (lat[to as usize], lon[to as usize]);
@@ -47,7 +53,10 @@ pub fn shortest_path(
     let mut settled = 0;
 
     dist[from as usize] = 0.0;
-    heap.push(State { estimate: h(from), node: from });
+    heap.push(State {
+        estimate: h(from),
+        node: from,
+    });
 
     while let Some(State { estimate, node: v }) = heap.pop() {
         let d = dist[v as usize];
@@ -65,7 +74,10 @@ pub fn shortest_path(
             if nd < dist[w as usize] {
                 dist[w as usize] = nd;
                 came_by[w as usize] = e;
-                heap.push(State { estimate: nd + h(w), node: w });
+                heap.push(State {
+                    estimate: nd + h(w),
+                    node: w,
+                });
             }
         }
     }
@@ -88,15 +100,15 @@ pub fn shortest_path(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{Graph, LinkInput};
+    use crate::graph::{Graph, LinkInput, NodeInput};
 
     fn demo() -> Graph {
         let nodes = [
-            (1000000101, 37.000, 127.000),
-            (1000000201, 37.000, 127.001),
-            (1000000301, 37.001, 127.001),
-            (1000000401, 37.001, 127.000),
-            (1000000501, 37.002, 127.001),
+            NodeInput::new(1000000101, 37.000, 127.000),
+            NodeInput::new(1000000201, 37.000, 127.001),
+            NodeInput::new(1000000301, 37.001, 127.001),
+            NodeInput::new(1000000401, 37.001, 127.000),
+            NodeInput::new(1000000501, 37.002, 127.001),
         ];
         let links = [
             LinkInput::new(1000001000, 1000000101, 1000000201, 100.0),
@@ -120,8 +132,10 @@ mod tests {
     #[test]
     fn same_result_as_dijkstra() {
         let g = demo();
-        let (d1, e1, _) = crate::dijkstra::shortest_path(&g.first_out, &g.head, &g.length, 0, 4).unwrap();
-        let (d2, e2, _) = shortest_path(&g.first_out, &g.head, &g.length, &g.lat, &g.lon, 0, 4).unwrap();
+        let (d1, e1, _) =
+            crate::dijkstra::shortest_path(&g.first_out, &g.head, &g.length, 0, 4).unwrap();
+        let (d2, e2, _) =
+            shortest_path(&g.first_out, &g.head, &g.length, &g.lat, &g.lon, 0, 4).unwrap();
         assert_eq!(d1, d2);
         assert_eq!(e1, e2);
     }

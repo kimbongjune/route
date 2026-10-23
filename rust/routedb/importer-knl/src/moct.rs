@@ -1,10 +1,19 @@
 use std::path::Path;
 
 use routedb_core::graph::LinkInput;
-use shapefile::dbase::{FieldValue, Record};
-use shapefile::Shape;
 
-pub const MOCT_SHPFILE_FOLDER_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\[2026-09-14]NODELINKDATA";
+/// MOCT_NODE의 노드. 좌표는 TM이다.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Node {
+    pub id: u64,
+    pub x: f64,
+    pub y: f64,
+}
+use shapefile::Shape;
+use shapefile::dbase::{FieldValue, Record};
+
+pub const MOCT_SHPFILE_FOLDER_LOCATION: &str =
+    r"C:\Users\nocdu\Desktop\dev\route\maps\[2026-09-14]NODELINKDATA";
 
 /// shp파일에서 특정 필드를 문자열로 추출한다.
 fn text_field<'a>(record: &'a Record, name: &str) -> Option<&'a str> {
@@ -23,14 +32,19 @@ fn numeric_field(record: &Record, name: &str) -> Option<f64> {
 }
 
 /// MOCT_NODE.shp에서 노드별 NODE_ID와 TM 좌표(x, y)를 추출한다.
-pub fn read_nodes(folder: &Path) -> Vec<(u64, f64, f64)> {
+pub fn read_nodes(folder: &Path) -> Vec<Node> {
     let mut reader = shapefile::Reader::from_path(folder.join("MOCT_NODE.shp")).unwrap();
     let mut nodes = Vec::new();
     for result in reader.iter_shapes_and_records() {
-        let (shape, record) = result.unwrap();
-        let Shape::Point(p) = shape else { panic!("노드가 Point 타입이 아님") };
-        let id: u64 = text_field(&record, "NODE_ID").unwrap().parse().unwrap();
-        nodes.push((id, p.x, p.y));
+        let (shape, record) = result.expect("레코드를 읽을 수 없음");
+        let Shape::Point(p) = shape else {
+            panic!("노드가 Point 타입이 아님")
+        };
+        let id: u64 = text_field(&record, "NODE_ID")
+            .expect("NODE_ID 필드가 없음")
+            .parse()
+            .expect("숫자 필드가 아님");
+        nodes.push(Node { id, x: p.x, y: p.y });
     }
     nodes
 }
@@ -40,9 +54,15 @@ pub fn read_node_types(folder: &Path) -> Vec<(u64, u16)> {
     let mut reader = shapefile::Reader::from_path(folder.join("MOCT_NODE.shp")).unwrap();
     let mut nodes = Vec::new();
     for result in reader.iter_shapes_and_records() {
-        let (_, record) = result.unwrap();
-        let id: u64 = text_field(&record, "NODE_ID").unwrap().parse().unwrap();
-        let node_type: u16 = text_field(&record, "NODE_TYPE").unwrap().parse().unwrap();
+        let (_, record) = result.expect("레코드를 읽을 수 없음");
+        let id: u64 = text_field(&record, "NODE_ID")
+            .expect("NODE_ID 필드가 없음")
+            .parse()
+            .expect("숫자 필드가 아님");
+        let node_type: u16 = text_field(&record, "NODE_TYPE")
+            .expect("NODE_TYPE 필드가 없음")
+            .parse()
+            .expect("숫자 필드가 아님");
         nodes.push((id, node_type));
     }
     nodes
@@ -60,35 +80,85 @@ pub fn read_turns(folder: &Path) -> Vec<Turn> {
     let mut reader = shapefile::dbase::Reader::from_path(folder.join("TURNINFO.dbf")).unwrap();
     let mut turns = Vec::new();
     for result in reader.iter_records() {
-        let record = result.unwrap();
-        let field = |name| text_field(&record, name).unwrap().parse().unwrap();
-        turns.push(Turn { st_link: field("ST_LINK"), ed_link: field("ED_LINK"), turn_type: text_field(&record, "TURN_TYPE").unwrap().parse().unwrap() });
+        let record = result.expect("레코드를 읽을 수 없음");
+        let field = |name| {
+            text_field(&record, name)
+                .expect("필드가 없음")
+                .parse()
+                .expect("숫자 필드가 아님")
+        };
+        turns.push(Turn {
+            st_link: field("ST_LINK"),
+            ed_link: field("ED_LINK"),
+            turn_type: text_field(&record, "TURN_TYPE")
+                .expect("TURN_TYPE 필드가 없음")
+                .parse()
+                .expect("숫자 필드가 아님"),
+        });
     }
     turns
 }
 
-/// MOCT_LINK.shp에서 링크별 LINK_ID, F_NODE, T_NODE, LENGTH, TM 좌표 목록 (x, y), 통과제한 REST_VEH, REST_W, REST_H, 제한속도 MAX_SPD, 도로등급 ROAD_RANK를 추출한다.
+/// MOCT_LINK.shp에서 링크별 LINK_ID, F_NODE, T_NODE, LENGTH, TM 좌표 목록 (x, y), 통과제한 REST_VEH, REST_W, REST_H, 제한속도 MAX_SPD, 도로등급 ROAD_RANK, 도로명 ROAD_NAME을 추출한다.
 /// ROAD_USE=1 미사용 링크는 제외한다.
 pub fn read_links(folder: &Path) -> Vec<LinkInput> {
     let mut reader = shapefile::Reader::from_path(folder.join("MOCT_LINK.shp")).unwrap();
     let mut links = Vec::new();
     for result in reader.iter_shapes_and_records() {
-        let (shape, record) = result.unwrap();
+        let (shape, record) = result.expect("레코드를 읽을 수 없음");
         if text_field(&record, "ROAD_USE") == Some("1") {
             continue;
         }
-        let Shape::Polyline(line) = shape else { panic!("링크가 Polyline 타입이 아님") };
-        let id: u64 = text_field(&record, "LINK_ID").unwrap().parse().unwrap();
-        let from: u64 = text_field(&record, "F_NODE").unwrap().parse().unwrap();
-        let to: u64 = text_field(&record, "T_NODE").unwrap().parse().unwrap();
-        let length = numeric_field(&record, "LENGTH").unwrap();
+        let Shape::Polyline(line) = shape else {
+            panic!("링크가 Polyline 타입이 아님")
+        };
+        let id: u64 = text_field(&record, "LINK_ID")
+            .expect("LINK_ID 필드가 없음")
+            .parse()
+            .expect("숫자 필드가 아님");
+        let from: u64 = text_field(&record, "F_NODE")
+            .expect("F_NODE 필드가 없음")
+            .parse()
+            .expect("숫자 필드가 아님");
+        let to: u64 = text_field(&record, "T_NODE")
+            .expect("T_NODE 필드가 없음")
+            .parse()
+            .expect("숫자 필드가 아님");
+        let length = numeric_field(&record, "LENGTH").expect("LENGTH 필드가 없음");
         let geometry = line.parts().iter().flatten().map(|p| (p.x, p.y)).collect();
-        let rest_veh: u8 = text_field(&record, "REST_VEH").unwrap().trim().parse().unwrap();
-        let rest_w = numeric_field(&record, "REST_W").unwrap() as u16;
-        let rest_h = numeric_field(&record, "REST_H").unwrap() as u16;
-        let max_spd = numeric_field(&record, "MAX_SPD").unwrap() as u16;
-        let road_rank: u8 = text_field(&record, "ROAD_RANK").unwrap().trim().parse().unwrap();
-        links.push(LinkInput { id, from, to, length, geometry, rest_veh, rest_w, rest_h, max_spd, road_rank });
+        let rest_veh: u8 = text_field(&record, "REST_VEH")
+            .expect("REST_VEH 필드가 없음")
+            .trim()
+            .parse()
+            .expect("숫자 필드가 아님");
+        let rest_w = numeric_field(&record, "REST_W").expect("REST_W 필드가 없음") as u16;
+        let rest_h = numeric_field(&record, "REST_H").expect("REST_H 필드가 없음") as u16;
+        let max_spd = numeric_field(&record, "MAX_SPD").expect("MAX_SPD 필드가 없음") as u16;
+        let road_rank: u8 = text_field(&record, "ROAD_RANK")
+            .expect("ROAD_RANK 필드가 없음")
+            .trim()
+            .parse()
+            .expect("숫자 필드가 아님");
+        // 도로명이 없는 링크는 "-"이다
+        let road_name = text_field(&record, "ROAD_NAME").unwrap_or("").trim();
+        let road_name = if road_name == "-" {
+            String::new()
+        } else {
+            road_name.to_string()
+        };
+        links.push(LinkInput {
+            id,
+            from,
+            to,
+            length,
+            geometry,
+            rest_veh,
+            rest_w,
+            rest_h,
+            max_spd,
+            road_rank,
+            road_name,
+        });
     }
     links
 }
@@ -117,7 +187,11 @@ mod tests {
     fn check_korean_field_read() {
         let moct_link_data_file = Path::new(MOCT_SHPFILE_FOLDER_LOCATION).join("MOCT_LINK.shp");
         let mut moct_link_reader = shapefile::Reader::from_path(moct_link_data_file).unwrap();
-        let (_, record) = moct_link_reader.iter_shapes_and_records().next().unwrap().unwrap();
+        let (_, record) = moct_link_reader
+            .iter_shapes_and_records()
+            .next()
+            .unwrap()
+            .unwrap();
         assert_eq!(Some("1160059701"), text_field(&record, "LINK_ID"));
         assert_eq!(Some("공원로"), text_field(&record, "ROAD_NAME"));
     }

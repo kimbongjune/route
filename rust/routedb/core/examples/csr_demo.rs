@@ -80,6 +80,16 @@ fn main() {
         let to: Vec<String> = (s..e)
             .map(|k| format!("{}(LINK {})", name[&node_id[head[k] as usize]], link_id[k]))
             .collect();
-        println!("  {} : 간선 {}..{} -> {}", name[&node_id[v]], s, e, if to.is_empty() { "없음".to_string() } else { to.join(", ") });
+        println!(
+            "  {} : 간선 {}..{} -> {}",
+            name[&node_id[v]],
+            s,
+            e,
+            if to.is_empty() {
+                "없음".to_string()
+            } else {
+                to.join(", ")
+            }
+        );
     }
 }

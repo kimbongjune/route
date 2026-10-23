@@ -101,28 +101,45 @@ const M_PER_LON: f64 = 111_320.0 * 0.809_017;
 
 /// 위경도를 평면 좌표(m)로 변환한다.
 pub fn planar(lat: &[f64], lon: &[f64]) -> Vec<(f64, f64)> {
-    lat.iter().zip(lon).map(|(&la, &lo)| (lo * M_PER_LON, la * M_PER_LAT)).collect()
+    lat.iter()
+        .zip(lon)
+        .map(|(&la, &lo)| (lo * M_PER_LON, la * M_PER_LAT))
+        .collect()
 }
 
 /// 점 p에서 선분 ab까지의 거리
 fn point_segment_distance(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let len2 = dx * dx + dy * dy;
-    let t = if len2 == 0.0 { 0.0 } else { (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0) };
+    let t = if len2 == 0.0 {
+        0.0
+    } else {
+        (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
+    };
     (p.0 - (a.0 + t * dx)).hypot(p.1 - (a.1 + t * dy))
 }
 
 /// 점 p에서 좌표 목록 line까지의 거리
 fn point_line_distance(p: (f64, f64), line: &[(f64, f64)]) -> f64 {
-    line.windows(2).map(|w| point_segment_distance(p, w[0], w[1])).fold(f64::INFINITY, f64::min)
+    line.windows(2)
+        .map(|w| point_segment_distance(p, w[0], w[1]))
+        .fold(f64::INFINITY, f64::min)
 }
 
 /// 간선마다 링크 좌표의 첫 구간과 마지막 구간 방향을 단위 벡터로 만든다. 좌표가 두 점 미만이면 (0, 0)이다.
-pub fn link_directions(geom_first: &[u32], geom_lat: &[f64], geom_lon: &[f64]) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
+pub fn link_directions(
+    geom_first: &[u32],
+    geom_lat: &[f64],
+    geom_lon: &[f64],
+) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
     let unit = |(la0, lo0): (f64, f64), (la1, lo1): (f64, f64)| {
         let (dx, dy) = ((lo1 - lo0) * M_PER_LON, (la1 - la0) * M_PER_LAT);
         let len = dx.hypot(dy);
-        if len == 0.0 { (0.0, 0.0) } else { (dx / len, dy / len) }
+        if len == 0.0 {
+            (0.0, 0.0)
+        } else {
+            (dx / len, dy / len)
+        }
     };
     let mut start = Vec::with_capacity(geom_first.len() - 1);
     let mut end = Vec::with_capacity(geom_first.len() - 1);
@@ -133,8 +150,14 @@ pub fn link_directions(geom_first: &[u32], geom_lat: &[f64], geom_lon: &[f64]) -
             end.push((0.0, 0.0));
             continue;
         }
-        start.push(unit((geom_lat[s], geom_lon[s]), (geom_lat[s + 1], geom_lon[s + 1])));
-        end.push(unit((geom_lat[t - 2], geom_lon[t - 2]), (geom_lat[t - 1], geom_lon[t - 1])));
+        start.push(unit(
+            (geom_lat[s], geom_lon[s]),
+            (geom_lat[s + 1], geom_lon[s + 1]),
+        ));
+        end.push(unit(
+            (geom_lat[t - 2], geom_lon[t - 2]),
+            (geom_lat[t - 1], geom_lon[t - 1]),
+        ));
     }
     (start, end)
 }
@@ -147,7 +170,10 @@ pub fn is_uturn(input: &LineGraphInput, a: u32, b: u32) -> bool {
     if ex * sx + ey * sy >= -0.9 {
         return false;
     }
-    let line = |e: u32| &input.geom_xy[input.geom_first[e as usize] as usize..input.geom_first[e as usize + 1] as usize];
+    let line = |e: u32| {
+        &input.geom_xy
+            [input.geom_first[e as usize] as usize..input.geom_first[e as usize + 1] as usize]
+    };
     let (la, lb) = (line(a), line(b));
     if la.is_empty() || lb.is_empty() {
         return false;
@@ -168,7 +194,10 @@ impl Rules {
         for (i, r) in rules.iter().enumerate() {
             by_st.entry(r.st).or_default().push((r.ed, i));
         }
-        Self { by_st, matched: (0..rules.len()).map(|_| Cell::new(false)).collect() }
+        Self {
+            by_st,
+            matched: (0..rules.len()).map(|_| Cell::new(false)).collect(),
+        }
     }
 
     /// 링크 열에서 st 뒤에 ed가 오는 규칙이 있는지 확인하고 걸린 규칙을 표시한다.
@@ -204,7 +233,13 @@ impl LineGraph {
         let forbidden = Rules::new(input.forbidden);
         let uturn = Rules::new(input.uturn);
         let mut stats = LineGraphStats::default();
-        let mut lg = LineGraph { first_out: vec![0], head: Vec::new(), weight: Vec::new(), via_first: vec![0], via: Vec::new() };
+        let mut line_graph = LineGraph {
+            first_out: vec![0],
+            head: Vec::new(),
+            weight: Vec::new(),
+            via_first: vec![0],
+            via: Vec::new(),
+        };
 
         let mut dist = vec![f64::INFINITY; node_count];
         let mut came_by = vec![u32::MAX; node_count];
@@ -216,7 +251,10 @@ impl LineGraph {
         for r in input.bridges {
             bridges.entry(r.st).or_default().push(r.ed);
         }
-        let line = |e: u32| &input.geom_xy[input.geom_first[e as usize] as usize..input.geom_first[e as usize + 1] as usize];
+        let line = |e: u32| {
+            &input.geom_xy
+                [input.geom_first[e as usize] as usize..input.geom_first[e as usize + 1] as usize]
+        };
 
         for a in 0..head.len() {
             candidates.clear();
@@ -285,22 +323,33 @@ impl LineGraph {
                 candidates.push((vec![a as u32, ed], gap));
                 stats.bridged += 1;
             }
-            lg.add_entry(&candidates, input, &forbidden, &uturn, &mut stats);
-            lg.first_out.push(lg.head.len() as u32);
+            line_graph.add_entry(&candidates, input, &forbidden, &uturn, &mut stats);
+            line_graph.first_out.push(line_graph.head.len() as u32);
         }
-        stats.transitions = lg.head.len();
+        stats.transitions = line_graph.head.len();
         stats.forbidden_rules_hit = forbidden.matched_count();
         stats.uturn_rules_hit = uturn.matched_count();
-        stats.forbidden_missed = (0..input.forbidden.len()).filter(|&i| !forbidden.matched[i].get()).collect();
-        (lg, stats)
+        stats.forbidden_missed = (0..input.forbidden.len())
+            .filter(|&i| !forbidden.matched[i].get())
+            .collect();
+        (line_graph, stats)
     }
 
     /// 한 진입 링크의 후보 링크 열로 통행을 추가한다.
-    fn add_entry(&mut self, candidates: &[(Vec<u32>, f64)], input: &LineGraphInput, forbidden: &Rules, uturn: &Rules, stats: &mut LineGraphStats) {
+    fn add_entry(
+        &mut self,
+        candidates: &[(Vec<u32>, f64)],
+        input: &LineGraphInput,
+        forbidden: &Rules,
+        uturn: &Rules,
+        stats: &mut LineGraphStats,
+    ) {
         let is_uturn = |seq: &[u32]| is_uturn(input, seq[0], seq[seq.len() - 1]);
         // 금지가 아니고 U턴도 아닌 통행이 있는지
         // 금지가 아니고 U턴도 아닌 통행이 있는지. 허용 U턴이 걸린 통행은 금지보다 우선한다
-        let has_other = candidates.iter().any(|(seq, _)| (uturn.hit(seq) || !forbidden.hit(seq)) && !is_uturn(seq));
+        let has_other = candidates
+            .iter()
+            .any(|(seq, _)| (uturn.hit(seq) || !forbidden.hit(seq)) && !is_uturn(seq));
         for (seq, gap) in candidates {
             let allowed = uturn.hit(seq);
             if forbidden.hit(seq) {
@@ -324,7 +373,12 @@ impl LineGraph {
                 stats.expanded += 1;
             }
             self.head.push(seq[seq.len() - 1]);
-            self.weight.push(gap + seq[1..].iter().map(|&e| input.length[e as usize]).sum::<f64>());
+            self.weight.push(
+                gap + seq[1..]
+                    .iter()
+                    .map(|&e| input.length[e as usize])
+                    .sum::<f64>(),
+            );
             self.via.extend_from_slice(&seq[1..seq.len() - 1]);
             self.via_first.push(self.via.len() as u32);
         }
@@ -345,8 +399,25 @@ impl LineGraph {
 }
 
 /// st 링크의 도착 노드에서 ed 링크의 출발 노드까지 max_links개 이하 링크로 가는 가장 짧은 경로의 노드 목록을 찾는다.
-pub fn rule_path(first_out: &[u32], head: &[u32], length: &[f64], tail: &[u32], st: u32, ed: u32, max_links: usize) -> Option<Vec<u32>> {
-    fn dfs(first_out: &[u32], head: &[u32], length: &[f64], to: u32, max_links: usize, path: &mut Vec<u32>, len: f64, best: &mut Option<(f64, Vec<u32>)>) {
+pub fn rule_path(
+    first_out: &[u32],
+    head: &[u32],
+    length: &[f64],
+    tail: &[u32],
+    st: u32,
+    ed: u32,
+    max_links: usize,
+) -> Option<Vec<u32>> {
+    fn dfs(
+        first_out: &[u32],
+        head: &[u32],
+        length: &[f64],
+        to: u32,
+        max_links: usize,
+        path: &mut Vec<u32>,
+        len: f64,
+        best: &mut Option<(f64, Vec<u32>)>,
+    ) {
         let v = *path.last().unwrap();
         if v == to {
             if best.as_ref().is_none_or(|b| len < b.0) {
@@ -361,19 +432,44 @@ pub fn rule_path(first_out: &[u32], head: &[u32], length: &[f64], tail: &[u32], 
             let w = head[e];
             if !path.contains(&w) {
                 path.push(w);
-                dfs(first_out, head, length, to, max_links, path, len + length[e], best);
+                dfs(
+                    first_out,
+                    head,
+                    length,
+                    to,
+                    max_links,
+                    path,
+                    len + length[e],
+                    best,
+                );
                 path.pop();
             }
         }
     }
     let mut best = None;
-    dfs(first_out, head, length, tail[ed as usize], max_links, &mut vec![head[st as usize]], 0.0, &mut best);
+    dfs(
+        first_out,
+        head,
+        length,
+        tail[ed as usize],
+        max_links,
+        &mut vec![head[st as usize]],
+        0.0,
+        &mut best,
+    );
     best.map(|b| b.1)
 }
 
 /// 교차로 노드 사이 max_len 이하 링크로 이어진 노드를 한 교차로 그룹으로 묶고, joined의 노드 목록마다 한 그룹으로 묶는다.
 /// 노드마다 그룹 번호를 반환하며 두 개 이상 묶이지 않은 노드는 u32::MAX이다.
-pub fn intersection_groups(first_out: &[u32], head: &[u32], length: &[f64], crossing: &[bool], max_len: f64, joined: &[Vec<u32>]) -> Vec<u32> {
+pub fn intersection_groups(
+    first_out: &[u32],
+    head: &[u32],
+    length: &[f64],
+    crossing: &[bool],
+    max_len: f64,
+    joined: &[Vec<u32>],
+) -> Vec<u32> {
     let n = first_out.len() - 1;
     let mut parent: Vec<u32> = (0..n as u32).collect();
     fn find(parent: &mut [u32], x: u32) -> u32 {
@@ -430,7 +526,12 @@ pub fn intersection_groups(first_out: &[u32], head: &[u32], length: &[f64], cros
 /// 간선마다 양 끝 노드가 같은 교차로 그룹에 속하는지 표시한다.
 pub fn internal_edges(first_out: &[u32], head: &[u32], group: &[u32]) -> Vec<bool> {
     let tail = tails(first_out);
-    (0..head.len()).map(|e| group[tail[e] as usize] != u32::MAX && group[tail[e] as usize] == group[head[e] as usize]).collect()
+    (0..head.len())
+        .map(|e| {
+            group[tail[e] as usize] != u32::MAX
+                && group[tail[e] as usize] == group[head[e] as usize]
+        })
+        .collect()
 }
 
 /// 간선마다 출발 교차로 번호를 만든다.
@@ -447,7 +548,7 @@ pub fn tails(first_out: &[u32]) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{Graph, LinkInput};
+    use crate::graph::{Graph, LinkInput, NodeInput};
 
     /// 평면 좌표(m)를 위경도로 변환한다.
     fn ll(x: f64, y: f64) -> (f64, f64) {
@@ -455,10 +556,16 @@ mod tests {
     }
 
     /// 좌표가 없는 링크에 출발·도착 교차로 좌표를 넣는다.
-    fn with_geometry(nodes: &[(u64, f64, f64)], mut links: Vec<LinkInput>) -> Vec<LinkInput> {
+    fn with_geometry(nodes: &[NodeInput], mut links: Vec<LinkInput>) -> Vec<LinkInput> {
         for l in &mut links {
             if l.geometry.is_empty() {
-                let at = |id| nodes.iter().find(|n| n.0 == id).map(|n| (n.1, n.2)).unwrap();
+                let at = |id| {
+                    nodes
+                        .iter()
+                        .find(|n| n.id == id)
+                        .map(|n| (n.lat, n.lon))
+                        .expect("링크 끝 교차로가 목록에 없음")
+                };
                 l.geometry = vec![at(l.from), at(l.to)];
             }
         }
@@ -473,14 +580,25 @@ mod tests {
     }
 
     impl Demo {
-        fn new(nodes: &[(u64, f64, f64)], links: Vec<LinkInput>) -> Self {
+        fn new(nodes: &[NodeInput], links: Vec<LinkInput>) -> Self {
             let g = Graph::build(nodes, &with_geometry(nodes, links)).0;
             let geom_xy = planar(&g.geom_lat, &g.geom_lon);
             let (start, end) = link_directions(&g.geom_first, &g.geom_lat, &g.geom_lon);
-            Self { g, geom_xy, start, end }
+            Self {
+                g,
+                geom_xy,
+                start,
+                end,
+            }
         }
 
-        fn input<'a>(&'a self, group: &'a [u32], internal: &'a [bool], forbidden: &'a [TurnRule], uturn: &'a [TurnRule]) -> LineGraphInput<'a> {
+        fn input<'a>(
+            &'a self,
+            group: &'a [u32],
+            internal: &'a [bool],
+            forbidden: &'a [TurnRule],
+            uturn: &'a [TurnRule],
+        ) -> LineGraphInput<'a> {
             LineGraphInput {
                 first_out: &self.g.first_out,
                 head: &self.g.head,
@@ -502,10 +620,20 @@ mod tests {
         }
 
         /// 진입 링크에서 이어지는 (진출 링크 LINK_ID, 비용, 경유 LINK_ID 목록)
-        fn outs(&self, lg: &LineGraph, entry: u64) -> Vec<(u64, f64, Vec<u64>)> {
+        fn outs(&self, line_graph: &LineGraph, entry: u64) -> Vec<(u64, f64, Vec<u64>)> {
             let a = self.edge(entry) as usize;
-            (lg.first_out[a] as usize..lg.first_out[a + 1] as usize)
-                .map(|t| (self.g.link_id[lg.head[t] as usize], lg.weight[t], lg.via_of(t).iter().map(|&v| self.g.link_id[v as usize]).collect()))
+            (line_graph.first_out[a] as usize..line_graph.first_out[a + 1] as usize)
+                .map(|t| {
+                    (
+                        self.g.link_id[line_graph.head[t] as usize],
+                        line_graph.weight[t],
+                        line_graph
+                            .via_of(t)
+                            .iter()
+                            .map(|&v| self.g.link_id[v as usize])
+                            .collect(),
+                    )
+                })
                 .collect()
         }
     }
@@ -514,12 +642,12 @@ mod tests {
     fn build_demo_line_graph() {
         // 가(0) 나(1) 다(2) 라(3) 마(4). 가↔나, 나↔다는 양방향이고 가→라, 라→다, 다→마는 일방통행이다
         let nodes = [
-            (1000000101, 37.000, 127.000),
-            (1000000201, 37.000, 127.001),
-            (1000000301, 37.001, 127.001),
-            (1000000401, 37.001, 127.000),
-            (1000000501, 37.002, 127.001),
-            (1000000601, 37.003, 127.001),
+            NodeInput::new(1000000101, 37.000, 127.000),
+            NodeInput::new(1000000201, 37.000, 127.001),
+            NodeInput::new(1000000301, 37.001, 127.001),
+            NodeInput::new(1000000401, 37.001, 127.000),
+            NodeInput::new(1000000501, 37.002, 127.001),
+            NodeInput::new(1000000601, 37.003, 127.001),
         ];
         let links = vec![
             LinkInput::new(1000001000, 1000000101, 1000000201, 100.0),
@@ -536,9 +664,13 @@ mod tests {
         // 간선 번호: 0 가→나, 1 가→라, 2 나→가, 3 나→다, 4 다→나, 5 다→마, 6 라→다, 7 마→바, 8 바→마
         let group = vec![u32::MAX; 6];
         let internal = vec![false; 9];
-        let (lg, stats) = LineGraph::build(&demo.input(&group, &internal, &[], &[]));
-        assert_eq!(lg.node_count(), 9);
-        let next = |a: u32| lg.head[lg.first_out[a as usize] as usize..lg.first_out[a as usize + 1] as usize].to_vec();
+        let (line_graph, stats) = LineGraph::build(&demo.input(&group, &internal, &[], &[]));
+        assert_eq!(line_graph.node_count(), 9);
+        let next = |a: u32| {
+            line_graph.head[line_graph.first_out[a as usize] as usize
+                ..line_graph.first_out[a as usize + 1] as usize]
+                .to_vec()
+        };
         // 가→나 다음은 나→다뿐이고 되돌아가는 나→가는 없다
         assert_eq!(next(0), vec![3]);
         // 가→라 다음은 라→다
@@ -556,30 +688,36 @@ mod tests {
         // 마→바 다음은 바→마뿐이고 바→마 다음은 마→바뿐이다. 막다른 길이라 U턴을 허용한다
         assert_eq!(next(7), vec![8]);
         assert_eq!(next(8), vec![7]);
-        assert_eq!(lg.edge_count(), 10);
+        assert_eq!(line_graph.edge_count(), 10);
         assert_eq!(stats.uturn_removed, 4);
         assert_eq!(stats.uturn_deadend, 2);
         // 통행 비용은 다음 링크 길이
-        assert_eq!(lg.weight[lg.first_out[0] as usize], 100.0);
+        assert_eq!(line_graph.weight[line_graph.first_out[0] as usize], 100.0);
 
         // 가→나 뒤 나→다 금지. 다른 진출 통행이 없으므로 나→가 U턴을 허용한다
         let forbidden = [TurnRule { st: 0, ed: 3 }];
-        let (lg, stats) = LineGraph::build(&demo.input(&group, &internal, &forbidden, &[]));
-        assert_eq!(lg.head[lg.first_out[0] as usize..lg.first_out[1] as usize], [2]);
+        let (line_graph, stats) = LineGraph::build(&demo.input(&group, &internal, &forbidden, &[]));
+        assert_eq!(
+            line_graph.head[line_graph.first_out[0] as usize..line_graph.first_out[1] as usize],
+            [2]
+        );
         assert_eq!(stats.forbidden_applied, 1);
         assert_eq!(stats.uturn_deadend, 3);
 
         // 나→다 뒤 다→나 U턴 허용
         let uturn = [TurnRule { st: 3, ed: 4 }];
-        let (lg, stats) = LineGraph::build(&demo.input(&group, &internal, &[], &uturn));
-        assert_eq!(lg.head[lg.first_out[3] as usize..lg.first_out[4] as usize], [4, 5]);
+        let (line_graph, stats) = LineGraph::build(&demo.input(&group, &internal, &[], &uturn));
+        assert_eq!(
+            line_graph.head[line_graph.first_out[3] as usize..line_graph.first_out[4] as usize],
+            [4, 5]
+        );
         assert_eq!(stats.uturn_allowed, 1);
     }
 
     #[test]
     fn expand_intersection_group() {
         // 모퉁이 A(1) B(2) C(3) D(4)가 내부 링크 A→B→C→D→A로 이어진 교차로. 서쪽 X(10)에서 A로 들어와 A에서 우회전 R(50), B에서 직진 S(60), C에서 좌회전 L(70), D에서 X 맞은편 X'(11)로 U턴한다
-        let at = |id: u64, x: f64, y: f64| (id, ll(x, y).0, ll(x, y).1);
+        let at = |id: u64, x: f64, y: f64| NodeInput::new(id, ll(x, y).0, ll(x, y).1);
         let nodes = [
             at(10, -100.0, -6.0),
             at(11, -100.0, 6.0),
@@ -613,35 +751,72 @@ mod tests {
         let internal = internal_edges(&g.first_out, &g.head, &group);
         assert_eq!(internal.iter().filter(|&&b| b).count(), 4);
 
-        let (lg, stats) = LineGraph::build(&demo.input(&group, &internal, &[], &[]));
+        let (line_graph, stats) = LineGraph::build(&demo.input(&group, &internal, &[], &[]));
         // 우회전, 직진, 좌회전 통행이 생기고 U턴은 없다
-        assert_eq!(demo.outs(&lg, 1000), vec![(3000, 94.0, vec![]), (4000, 106.0, vec![2001]), (5000, 118.0, vec![2001, 2002])]);
+        assert_eq!(
+            demo.outs(&line_graph, 1000),
+            vec![
+                (3000, 94.0, vec![]),
+                (4000, 106.0, vec![2001]),
+                (5000, 118.0, vec![2001, 2002])
+            ]
+        );
         assert_eq!(stats.expanded, 2);
         assert_eq!(stats.uturn_removed, 1);
         // 내부 링크에서 출발하는 통행은 없다
         let e = demo.edge(2001) as usize;
-        assert_eq!(lg.first_out[e], lg.first_out[e + 1]);
+        assert_eq!(line_graph.first_out[e], line_graph.first_out[e + 1]);
 
         // 좌회전 금지와 U턴 허용
-        let forbidden = [TurnRule { st: demo.edge(1000), ed: demo.edge(5000) }];
-        let uturn = [TurnRule { st: demo.edge(1000), ed: demo.edge(1100) }];
-        let (lg, stats) = LineGraph::build(&demo.input(&group, &internal, &forbidden, &uturn));
-        assert_eq!(demo.outs(&lg, 1000), vec![(3000, 94.0, vec![]), (4000, 106.0, vec![2001]), (1100, 130.0, vec![2001, 2002, 2003])]);
+        let forbidden = [TurnRule {
+            st: demo.edge(1000),
+            ed: demo.edge(5000),
+        }];
+        let uturn = [TurnRule {
+            st: demo.edge(1000),
+            ed: demo.edge(1100),
+        }];
+        let (line_graph, stats) =
+            LineGraph::build(&demo.input(&group, &internal, &forbidden, &uturn));
+        assert_eq!(
+            demo.outs(&line_graph, 1000),
+            vec![
+                (3000, 94.0, vec![]),
+                (4000, 106.0, vec![2001]),
+                (1100, 130.0, vec![2001, 2002, 2003])
+            ]
+        );
         assert_eq!(stats.forbidden_applied, 1);
         assert_eq!(stats.uturn_allowed, 1);
         assert_eq!(stats.expanded, 2);
 
         // 내부 링크 B→C를 st로 둔 금지도 적용된다
-        let forbidden = [TurnRule { st: demo.edge(2002), ed: demo.edge(5000) }];
-        let (lg, _) = LineGraph::build(&demo.input(&group, &internal, &forbidden, &[]));
-        assert_eq!(demo.outs(&lg, 1000).iter().map(|o| o.0).collect::<Vec<_>>(), vec![3000, 4000]);
+        let forbidden = [TurnRule {
+            st: demo.edge(2002),
+            ed: demo.edge(5000),
+        }];
+        let (line_graph, _) = LineGraph::build(&demo.input(&group, &internal, &forbidden, &[]));
+        assert_eq!(
+            demo.outs(&line_graph, 1000)
+                .iter()
+                .map(|o| o.0)
+                .collect::<Vec<_>>(),
+            vec![3000, 4000]
+        );
     }
 
     #[test]
     fn join_rule_path_over_long_link() {
         // 신림로처럼 P→Q 진입, Q→R 연결 링크 30m, R→S 반대 방향 진출. Q에서 직진 Q→T도 있다. 다른 길 X→R도 R로 들어온다
-        let at = |id: u64, x: f64, y: f64| (id, ll(x, y).0, ll(x, y).1);
-        let nodes = [at(1, -100.0, 0.0), at(2, 0.0, 0.0), at(3, 0.0, 30.0), at(4, -100.0, 30.0), at(5, 100.0, 0.0), at(6, 0.0, 130.0)];
+        let at = |id: u64, x: f64, y: f64| NodeInput::new(id, ll(x, y).0, ll(x, y).1);
+        let nodes = [
+            at(1, -100.0, 0.0),
+            at(2, 0.0, 0.0),
+            at(3, 0.0, 30.0),
+            at(4, -100.0, 30.0),
+            at(5, 100.0, 0.0),
+            at(6, 0.0, 130.0),
+        ];
         let links = vec![
             LinkInput::new(100, 1, 2, 100.0), // P→Q 진입
             LinkInput::new(200, 2, 3, 30.0),  // Q→R 연결 링크
@@ -654,35 +829,62 @@ mod tests {
         let tail = tails(&g.first_out);
         let crossing = vec![true; 6];
         // 연결 링크 → 진출은 좌회전금지, 진입 → 진출은 허용 U턴
-        let forbidden = [TurnRule { st: demo.edge(200), ed: demo.edge(300) }];
-        let uturn = [TurnRule { st: demo.edge(100), ed: demo.edge(300) }];
+        let forbidden = [TurnRule {
+            st: demo.edge(200),
+            ed: demo.edge(300),
+        }];
+        let uturn = [TurnRule {
+            st: demo.edge(100),
+            ed: demo.edge(300),
+        }];
 
         // 25m로만 묶으면 진입 → 진출 통행이 없어 허용 U턴이 걸리지 않는다
         let group = intersection_groups(&g.first_out, &g.head, &g.length, &crossing, 25.0, &[]);
         let internal = internal_edges(&g.first_out, &g.head, &group);
-        let (lg, stats) = LineGraph::build(&demo.input(&group, &internal, &forbidden, &uturn));
-        assert_eq!(demo.outs(&lg, 200), vec![]);
+        let (line_graph, stats) =
+            LineGraph::build(&demo.input(&group, &internal, &forbidden, &uturn));
+        assert_eq!(demo.outs(&line_graph, 200), vec![]);
         assert_eq!(stats.uturn_rules_hit, 0);
 
         // 허용 U턴의 경로 Q, R을 한 그룹으로 묶으면 진입 → 연결 링크 → 진출 통행이 생기고 허용 U턴이 금지보다 우선한다
-        let path = rule_path(&g.first_out, &g.head, &g.length, &tail, demo.edge(100), demo.edge(300), 5).unwrap();
+        let path = rule_path(
+            &g.first_out,
+            &g.head,
+            &g.length,
+            &tail,
+            demo.edge(100),
+            demo.edge(300),
+            5,
+        )
+        .unwrap();
         let node = |id: u64| g.node_id.iter().position(|&x| x == id).unwrap() as u32;
         assert_eq!(path, vec![node(2), node(3)]);
         let group = intersection_groups(&g.first_out, &g.head, &g.length, &crossing, 25.0, &[path]);
         let internal = internal_edges(&g.first_out, &g.head, &group);
-        let (lg, stats) = LineGraph::build(&demo.input(&group, &internal, &forbidden, &uturn));
-        assert_eq!(demo.outs(&lg, 100), vec![(400, 100.0, vec![]), (300, 130.0, vec![200])]);
+        let (line_graph, stats) =
+            LineGraph::build(&demo.input(&group, &internal, &forbidden, &uturn));
+        assert_eq!(
+            demo.outs(&line_graph, 100),
+            vec![(400, 100.0, vec![]), (300, 130.0, vec![200])]
+        );
         assert_eq!(stats.uturn_rules_hit, 1);
         assert_eq!(stats.forbidden_overridden, 1);
         // X에서 R로 들어온 차는 진출 링크로 갈 수 있다. 금지는 연결 링크에서 온 경우만이다
-        assert_eq!(demo.outs(&lg, 500), vec![(300, 100.0, vec![])]);
+        assert_eq!(demo.outs(&line_graph, 500), vec![(300, 100.0, vec![])]);
     }
 
     #[test]
     fn bridge_uturn_without_link() {
         // IC처럼 진출 램프 P→Q가 Q에서 끝나고 반대 방향 진입 램프 R→S가 Q에서 8m 떨어진 R에서 시작한다. Q와 R을 잇는 링크는 없다
-        let at = |id: u64, x: f64, y: f64| (id, ll(x, y).0, ll(x, y).1);
-        let nodes = [at(1, -100.0, 0.0), at(2, 0.0, 0.0), at(3, 0.0, 8.0), at(4, -100.0, 8.0), at(5, 0.0, -100.0), at(6, 0.0, 108.0)];
+        let at = |id: u64, x: f64, y: f64| NodeInput::new(id, ll(x, y).0, ll(x, y).1);
+        let nodes = [
+            at(1, -100.0, 0.0),
+            at(2, 0.0, 0.0),
+            at(3, 0.0, 8.0),
+            at(4, -100.0, 8.0),
+            at(5, 0.0, -100.0),
+            at(6, 0.0, 108.0),
+        ];
         let links = vec![
             LinkInput::new(100, 1, 2, 100.0), // P→Q 진출 램프
             LinkInput::new(200, 3, 4, 100.0), // R→S 진입 램프
@@ -692,18 +894,32 @@ mod tests {
         let demo = Demo::new(&nodes, links);
         let g = &demo.g;
         let tail = tails(&g.first_out);
-        assert_eq!(rule_path(&g.first_out, &g.head, &g.length, &tail, demo.edge(100), demo.edge(200), 5), None);
+        assert_eq!(
+            rule_path(
+                &g.first_out,
+                &g.head,
+                &g.length,
+                &tail,
+                demo.edge(100),
+                demo.edge(200),
+                5
+            ),
+            None
+        );
         let group = vec![u32::MAX; 6];
         let internal = vec![false; 4];
-        let uturn = [TurnRule { st: demo.edge(100), ed: demo.edge(200) }];
+        let uturn = [TurnRule {
+            st: demo.edge(100),
+            ed: demo.edge(200),
+        }];
         let mut input = demo.input(&group, &internal, &[], &uturn);
-        let (lg, _) = LineGraph::build(&input);
-        assert_eq!(demo.outs(&lg, 100), vec![(300, 100.0, vec![])]);
+        let (line_graph, _) = LineGraph::build(&input);
+        assert_eq!(demo.outs(&line_graph, 100), vec![(300, 100.0, vec![])]);
 
         // 건너가는 통행의 비용은 Q와 R 사이 8m와 진입 램프 길이의 합
         input.bridges = &uturn;
-        let (lg, stats) = LineGraph::build(&input);
-        let outs = demo.outs(&lg, 100);
+        let (line_graph, stats) = LineGraph::build(&input);
+        let outs = demo.outs(&line_graph, 100);
         assert_eq!(outs.len(), 2);
         assert_eq!(outs[1].0, 200);
         assert!((outs[1].1 - 108.0).abs() < 1e-6);

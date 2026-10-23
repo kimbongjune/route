@@ -1,4 +1,4 @@
-use rstar::{PointDistance, RTree, RTreeObject, AABB};
+use rstar::{AABB, PointDistance, RTree, RTreeObject};
 
 /// 위도 1도의 길이(m)
 const M_PER_LAT: f64 = 111_320.0;
@@ -29,7 +29,11 @@ impl Segment {
     fn project(&self, p: [f64; 2]) -> ([f64; 2], f64) {
         let (dx, dy) = (self.b[0] - self.a[0], self.b[1] - self.a[1]);
         let len2 = dx * dx + dy * dy;
-        let t = if len2 == 0.0 { 0.0 } else { (((p[0] - self.a[0]) * dx + (p[1] - self.a[1]) * dy) / len2).clamp(0.0, 1.0) };
+        let t = if len2 == 0.0 {
+            0.0
+        } else {
+            (((p[0] - self.a[0]) * dx + (p[1] - self.a[1]) * dy) / len2).clamp(0.0, 1.0)
+        };
         ([self.a[0] + t * dx, self.a[1] + t * dy], t)
     }
 }
@@ -50,7 +54,7 @@ impl PointDistance for Segment {
 }
 
 /// 스냅 결과
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Snap {
     /// 가장 가까운 간선 번호
     pub edge: u32,
@@ -76,12 +80,26 @@ impl LinkIndex {
             let (s, t) = (geom_first[e] as usize, geom_first[e + 1] as usize);
             let mut offset_a = 0.0;
             for i in s..t.saturating_sub(1) {
-                let (a, b) = (to_xy(geom_lat[i], geom_lon[i]), to_xy(geom_lat[i + 1], geom_lon[i + 1]));
-                segments.push(Segment { edge: e as u32, a, b, offset_a });
+                let (a, b) = (
+                    to_xy(geom_lat[i], geom_lon[i]),
+                    to_xy(geom_lat[i + 1], geom_lon[i + 1]),
+                );
+                segments.push(Segment {
+                    edge: e as u32,
+                    a,
+                    b,
+                    offset_a,
+                });
                 offset_a += ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
             }
         }
-        Self { tree: RTree::bulk_load(segments) }
+        Self {
+            tree: RTree::bulk_load(segments),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tree.size() == 0
     }
 
     pub fn len(&self) -> usize {
@@ -104,7 +122,13 @@ impl LinkIndex {
             let (q, t) = seg.project(p);
             let (lat, lon) = to_latlon(q);
             let seg_len = ((seg.b[0] - seg.a[0]).powi(2) + (seg.b[1] - seg.a[1]).powi(2)).sqrt();
-            snaps.push(Snap { edge: seg.edge, distance_m: seg.distance_2(&p).sqrt(), lat, lon, offset_m: seg.offset_a + t * seg_len });
+            snaps.push(Snap {
+                edge: seg.edge,
+                distance_m: seg.distance_2(&p).sqrt(),
+                lat,
+                lon,
+                offset_m: seg.offset_a + t * seg_len,
+            });
             if snaps.len() == n {
                 break;
             }

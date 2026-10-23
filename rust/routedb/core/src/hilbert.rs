@@ -37,7 +37,10 @@ pub fn sort_order(points: &[(f64, f64)]) -> Vec<usize> {
     let cells = f64::from((1u32 << ORDER) - 1);
     let to_cell = |v: f64, min: f64, max: f64| ((v - min) / (max - min).max(1e-9) * cells) as u32;
 
-    let keys: Vec<u64> = points.iter().map(|&(x, y)| index(ORDER, to_cell(x, x0, x1), to_cell(y, y0, y1))).collect();
+    let keys: Vec<u64> = points
+        .iter()
+        .map(|&(x, y)| index(ORDER, to_cell(x, x0, x1), to_cell(y, y0, y1)))
+        .collect();
     let mut order: Vec<usize> = (0..points.len()).collect();
     order.sort_by_key(|&i| keys[i]);
     order
@@ -50,7 +53,15 @@ mod tests {
     #[test]
     fn order1() {
         // 2x2 격자는 (0,0) -> (0,1) -> (1,1) -> (1,0) 순서
-        assert_eq!([index(1, 0, 0), index(1, 0, 1), index(1, 1, 1), index(1, 1, 0)], [0, 1, 2, 3]);
+        assert_eq!(
+            [
+                index(1, 0, 0),
+                index(1, 0, 1),
+                index(1, 1, 1),
+                index(1, 1, 0)
+            ],
+            [0, 1, 2, 3]
+        );
     }
 
     #[test]

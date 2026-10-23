@@ -10,14 +10,15 @@ use crate::linegraph::LineGraph;
 
 /// 그래프 파일 맨 앞 8바이트
 pub const MAGIC: &[u8; 8] = b"ROUTEDB\0";
-pub const VERSION: u32 = 7;
-/// MAGIC 8 + VERSION 4 + 빈칸 4 + 교차로 수 8 + 간선 수 8 + 링크 좌표 수 8 + 통행 수 8 + 경유 링크 수 8 + 영업소코드 수 8
-pub const HEADER_LEN: usize = 64;
+pub const VERSION: u32 = 9;
+/// MAGIC 8 + VERSION 4 + 빈칸 4 + 교차로 수 8 + 간선 수 8 + 링크 좌표 수 8 + 통행 수 8 + 경유 링크 수 8 + 영업소코드 수 8 + 지점 수 8
+/// + 도로명 수 8 + 도로명 바이트 수 8
+pub const HEADER_LEN: usize = 88;
 
 impl Graph {
     /// 그래프와 line graph를 헤더, 8바이트 배열(node_id, link_id, length, lat, lon, geom_lat, geom_lon, turn_weight),
-    /// 4바이트 배열(first_out, head, geom_first, turn_first_out, turn_head, via_first, via, toll_first, toll_unit),
-    /// 2바이트 배열(rest_w, rest_h, max_spd), 1바이트 배열(rest_veh, road_rank) 순서로 파일에 저장한다.
+    /// 4바이트 배열(first_out, head, geom_first, turn_first_out, turn_head, via_first, via, toll_first, toll_unit, poi_first, poi_id),
+    /// 2바이트 배열(rest_w, rest_h, max_spd, poi_at), 1바이트 배열(rest_veh, road_rank, poi_kind, poi_limit, poi_enforce) 순서로 파일에 저장한다.
     pub fn write(&self, line: &LineGraph, path: &Path) -> Result<()> {
         let mut w = BufWriter::new(File::create(path)?);
 
@@ -31,6 +32,16 @@ impl Graph {
         w.write_all(&(line.edge_count() as u64).to_le_bytes())?;
         w.write_all(&(line.via.len() as u64).to_le_bytes())?;
         w.write_all(&(self.toll_unit.len() as u64).to_le_bytes())?;
+        w.write_all(&(self.poi_id.len() as u64).to_le_bytes())?;
+        // 도로명 표는 이름을 UTF-8로 이어 붙인 바이트 배열과 이름마다 시작 위치로 저장한다
+        let name_bytes: Vec<u8> = self.road_names.concat().into_bytes();
+        let mut name_first = Vec::with_capacity(self.road_names.len() + 1);
+        name_first.push(0u32);
+        for name in &self.road_names {
+            name_first.push(name_first.last().unwrap() + name.len() as u32);
+        }
+        w.write_all(&(self.road_names.len() as u64).to_le_bytes())?;
+        w.write_all(&(name_bytes.len() as u64).to_le_bytes())?;
 
         // 8바이트 배열
         w.write_all(bytemuck::cast_slice(&self.node_id))?;
@@ -52,13 +63,22 @@ impl Graph {
         w.write_all(bytemuck::cast_slice(&line.via))?;
         w.write_all(bytemuck::cast_slice(&self.toll_first))?;
         w.write_all(bytemuck::cast_slice(&self.toll_unit))?;
+        w.write_all(bytemuck::cast_slice(&self.poi_first))?;
+        w.write_all(bytemuck::cast_slice(&self.poi_id))?;
+        w.write_all(bytemuck::cast_slice(&name_first))?;
 
         // 2바이트 배열과 1바이트 배열
         w.write_all(bytemuck::cast_slice(&self.rest_w))?;
         w.write_all(bytemuck::cast_slice(&self.rest_h))?;
         w.write_all(bytemuck::cast_slice(&self.max_spd))?;
+        w.write_all(bytemuck::cast_slice(&self.poi_at))?;
+        w.write_all(bytemuck::cast_slice(&self.road_name))?;
         w.write_all(&self.rest_veh)?;
         w.write_all(&self.road_rank)?;
+        w.write_all(&self.poi_kind)?;
+        w.write_all(&self.poi_limit)?;
+        w.write_all(&self.poi_enforce)?;
+        w.write_all(&name_bytes)?;
 
         w.flush()
     }
@@ -73,8 +93,11 @@ pub struct GraphFile {
     turn_count: usize,
     via_count: usize,
     toll_count: usize,
+    poi_count: usize,
+    name_count: usize,
+    name_byte_count: usize,
     /// 배열별 파일 내 위치
-    ranges: [Range<usize>; 22],
+    ranges: [Range<usize>; 31],
 }
 
 impl GraphFile {
@@ -88,7 +111,10 @@ impl GraphFile {
         }
         let version = u32::from_le_bytes(mmap[8..12].try_into().unwrap());
         if version != VERSION {
-            return Err(Error::new(ErrorKind::InvalidData, format!("지원하지 않는 버전 {version}")));
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("지원하지 않는 버전 {version}"),
+            ));
         }
         let count = |at: usize| u64::from_le_bytes(mmap[at..at + 8].try_into().unwrap()) as usize;
         let node_count = count(16);
@@ -97,6 +123,9 @@ impl GraphFile {
         let turn_count = count(40);
         let via_count = count(48);
         let toll_count = count(56);
+        let poi_count = count(64);
+        let name_count = count(72);
+        let name_byte_count = count(80);
 
         // 배열별 파일 내 위치 계산
         let sizes = [
@@ -117,11 +146,20 @@ impl GraphFile {
             4 * via_count,        // via
             4 * (edge_count + 1), // toll_first
             4 * toll_count,       // toll_unit
+            4 * (edge_count + 1), // poi_first
+            4 * poi_count,        // poi_id
+            4 * (name_count + 1), // name_first
             2 * edge_count,       // rest_w
             2 * edge_count,       // rest_h
             2 * edge_count,       // max_spd
+            2 * poi_count,        // poi_at
+            2 * edge_count,       // road_name
             edge_count,           // rest_veh
             edge_count,           // road_rank
+            poi_count,            // poi_kind
+            poi_count,            // poi_limit
+            poi_count,            // poi_enforce
+            name_byte_count,      // name_bytes
         ];
         let mut start = HEADER_LEN;
         let ranges = sizes.map(|size| {
@@ -130,9 +168,28 @@ impl GraphFile {
             range
         });
         if start != mmap.len() {
-            return Err(Error::new(ErrorKind::InvalidData, format!("파일 크기가 {}바이트여야 하는데 {}바이트", start, mmap.len())));
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "파일 크기가 {}바이트여야 하는데 {}바이트",
+                    start,
+                    mmap.len()
+                ),
+            ));
         }
-        Ok(Self { mmap, node_count, edge_count, geom_count, turn_count, via_count, toll_count, ranges })
+        Ok(Self {
+            mmap,
+            node_count,
+            edge_count,
+            geom_count,
+            turn_count,
+            via_count,
+            toll_count,
+            poi_count,
+            name_count,
+            name_byte_count,
+            ranges,
+        })
     }
 
     pub fn node_count(&self) -> usize {
@@ -157,6 +214,18 @@ impl GraphFile {
 
     pub fn toll_count(&self) -> usize {
         self.toll_count
+    }
+
+    pub fn poi_count(&self) -> usize {
+        self.poi_count
+    }
+
+    pub fn name_count(&self) -> usize {
+        self.name_count
+    }
+
+    pub fn name_byte_count(&self) -> usize {
+        self.name_byte_count
     }
 
     pub fn node_id(&self) -> &[u64] {
@@ -244,44 +313,108 @@ impl GraphFile {
         &self.toll_unit()[self.toll_first()[e] as usize..self.toll_first()[e + 1] as usize]
     }
 
+    /// 간선마다 지점이 시작하는 번호
+    pub fn poi_first(&self) -> &[u32] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[17].clone()])
+    }
+
+    /// 지점마다 카메라번호 또는 방지턱 지점번호
+    pub fn poi_id(&self) -> &[u32] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[18].clone()])
+    }
+
     /// 간선마다 통과제한하중(kg). 0은 제한 없음
     pub fn rest_w(&self) -> &[u16] {
-        bytemuck::cast_slice(&self.mmap[self.ranges[17].clone()])
+        bytemuck::cast_slice(&self.mmap[self.ranges[20].clone()])
     }
 
     /// 간선마다 통과제한높이(cm). 0은 제한 없음
     pub fn rest_h(&self) -> &[u16] {
-        bytemuck::cast_slice(&self.mmap[self.ranges[18].clone()])
+        bytemuck::cast_slice(&self.mmap[self.ranges[21].clone()])
     }
 
     /// 간선마다 최고제한속도(km/h)
     pub fn max_spd(&self) -> &[u16] {
-        bytemuck::cast_slice(&self.mmap[self.ranges[19].clone()])
+        bytemuck::cast_slice(&self.mmap[self.ranges[22].clone()])
+    }
+
+    /// 지점마다 링크 안 위치 비율 × 10,000
+    pub fn poi_at(&self) -> &[u16] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[23].clone()])
     }
 
     /// 간선마다 통행제한차량 코드. 0은 제한 없음
     pub fn rest_veh(&self) -> &[u8] {
-        &self.mmap[self.ranges[20].clone()]
+        &self.mmap[self.ranges[25].clone()]
     }
 
     /// 간선마다 도로등급. 101 고속국도부터 108 기타
     pub fn road_rank(&self) -> &[u8] {
-        &self.mmap[self.ranges[21].clone()]
+        &self.mmap[self.ranges[26].clone()]
+    }
+
+    /// 지점마다 종류. 1 카메라, 2 방지턱
+    pub fn poi_kind(&self) -> &[u8] {
+        &self.mmap[self.ranges[27].clone()]
+    }
+
+    /// 지점마다 카메라 제한속도(km/h). 0은 없음
+    pub fn poi_limit(&self) -> &[u8] {
+        &self.mmap[self.ranges[28].clone()]
+    }
+
+    /// 지점마다 카메라 단속구분 비트. 방지턱은 1이 연속형이다
+    pub fn poi_enforce(&self) -> &[u8] {
+        &self.mmap[self.ranges[29].clone()]
+    }
+
+    /// 간선 e의 지점 번호 범위
+    pub fn poi_range(&self, e: usize) -> Range<usize> {
+        self.poi_first()[e] as usize..self.poi_first()[e + 1] as usize
+    }
+
+    /// 도로명마다 name_bytes에서 시작하는 위치
+    pub fn name_first(&self) -> &[u32] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[19].clone()])
+    }
+
+    /// 간선마다 도로명 번호. 0은 빈 이름이다
+    pub fn road_name(&self) -> &[u16] {
+        bytemuck::cast_slice(&self.mmap[self.ranges[24].clone()])
+    }
+
+    /// 도로명을 UTF-8로 이어 붙인 바이트
+    pub fn name_bytes(&self) -> &[u8] {
+        &self.mmap[self.ranges[30].clone()]
+    }
+
+    /// k번 도로명
+    pub fn name(&self, k: usize) -> &str {
+        let (s, t) = (
+            self.name_first()[k] as usize,
+            self.name_first()[k + 1] as usize,
+        );
+        std::str::from_utf8(&self.name_bytes()[s..t]).expect("도로명이 UTF-8이 아님")
+    }
+
+    /// 간선 e의 도로명. 없으면 빈 문자열
+    pub fn road_name_of(&self, e: usize) -> &str {
+        self.name(self.road_name()[e] as usize)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::LinkInput;
+    use crate::graph::{LinkInput, NodeInput, PoiInput, TollInput};
 
     fn demo() -> Graph {
         let nodes = [
-            (1000000101, 37.000, 127.000),
-            (1000000201, 37.000, 127.001),
-            (1000000301, 37.001, 127.001),
-            (1000000401, 37.001, 127.000),
-            (1000000501, 37.002, 127.001),
+            NodeInput::new(1000000101, 37.000, 127.000),
+            NodeInput::new(1000000201, 37.000, 127.001),
+            NodeInput::new(1000000301, 37.001, 127.001),
+            NodeInput::new(1000000401, 37.001, 127.000),
+            NodeInput::new(1000000501, 37.002, 127.001),
         ];
         let mut links = vec![
             LinkInput::new(1000001000, 1000000101, 1000000201, 100.0),
@@ -293,6 +426,9 @@ mod tests {
             LinkInput::new(1000005000, 1000000301, 1000000501, 100.0),
         ];
         links[4].geometry = vec![(37.000, 127.000), (37.0005, 126.9995), (37.001, 127.000)];
+        links[0].road_name = "공원로".to_string();
+        links[1].road_name = "공원로".to_string();
+        links[4].road_name = "능안로".to_string();
         // 가 -> 라 링크는 높이 450cm, 하중 4,500kg 제한에 트럭 금지
         links[4].rest_h = 450;
         links[4].rest_w = 4500;
@@ -316,7 +452,30 @@ mod tests {
     #[test]
     fn write_and_open_same_graph() {
         let mut g = demo();
-        g.set_tolls(&[(1000002000, 246), (1000002000, 29), (1000005000, 29)]);
+        g.set_tolls(&[
+            TollInput::new(1000002000, 246),
+            TollInput::new(1000002000, 29),
+            TollInput::new(1000005000, 29),
+        ]);
+        // 링크 1000002000에 카메라 0.3 지점, 링크 1000005000에 방지턱 0.6 지점
+        g.set_pois(&[
+            PoiInput {
+                link_id: 1000002000,
+                kind: 1,
+                id: 5,
+                at: 3000,
+                limit: 30,
+                enforce: 3,
+            },
+            PoiInput {
+                link_id: 1000005000,
+                kind: 2,
+                id: 7,
+                at: 6000,
+                limit: 0,
+                enforce: 1,
+            },
+        ]);
         let line = demo_line();
         let path = std::env::temp_dir().join(format!("routedb_test_{}.rdb", std::process::id()));
         g.write(&line, &path).unwrap();
@@ -353,8 +512,42 @@ mod tests {
         assert_eq!(f.rest_veh(), g.rest_veh.as_slice());
         assert_eq!(f.max_spd(), g.max_spd.as_slice());
         assert_eq!(f.road_rank(), g.road_rank.as_slice());
+        assert_eq!(f.poi_count(), 2);
+        assert_eq!(f.poi_first(), g.poi_first.as_slice());
+        assert_eq!(
+            (
+                f.poi_id(),
+                f.poi_at(),
+                f.poi_kind(),
+                f.poi_limit(),
+                f.poi_enforce()
+            ),
+            (
+                &[5, 7][..],
+                &[3000, 6000][..],
+                &[1, 2][..],
+                &[30, 0][..],
+                &[3, 1][..]
+            )
+        );
+        let e = g.link_id.iter().position(|&id| id == 1000005000).unwrap();
+        assert_eq!(f.poi_range(e), 1..2);
+        assert_eq!(f.name_count(), 3);
+        assert_eq!(f.road_name(), g.road_name.as_slice());
+        assert_eq!((f.name(0), f.name(1), f.name(2)), ("", "공원로", "능안로"));
         let e = g.link_id.iter().position(|&id| id == 1000003000).unwrap();
-        assert_eq!((f.rest_h()[e], f.rest_w()[e], f.rest_veh()[e], f.max_spd()[e], f.road_rank()[e]), (450, 4500, 4, 30, 104));
+        assert_eq!(f.road_name_of(e), "능안로");
+        let e = g.link_id.iter().position(|&id| id == 1000003000).unwrap();
+        assert_eq!(
+            (
+                f.rest_h()[e],
+                f.rest_w()[e],
+                f.rest_veh()[e],
+                f.max_spd()[e],
+                f.road_rank()[e]
+            ),
+            (450, 4500, 4, 30, 104)
+        );
         assert_eq!(f.rest_h().iter().filter(|&&h| h > 0).count(), 1);
 
         drop(f);
@@ -363,7 +556,8 @@ mod tests {
 
     #[test]
     fn open_other_file() {
-        let path = std::env::temp_dir().join(format!("routedb_test_other_{}.rdb", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("routedb_test_other_{}.rdb", std::process::id()));
         std::fs::write(&path, b"not a routedb graph file, just some bytes").unwrap();
         assert!(GraphFile::open(&path).is_err());
         std::fs::remove_file(&path).unwrap();
