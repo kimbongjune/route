@@ -29,3 +29,23 @@ button:disabled { color: #999; }
 .marker { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 2px rgba(0, 0, 0, 0.6); }
 .marker.from { background: #2a7de1; }
 .marker.to { background: #d9534f; }
+#progress { margin-top: 6px; padding: 8px; background: #eef4ff; border-radius: 6px; }
+#next-instruction { font-size: 16px; font-weight: 600; }
+#remaining { color: #555; font-size: 13px; margin-top: 2px; }
+.position { width: 0; height: 0; border-left: 11px solid transparent; border-right: 11px solid transparent; border-bottom: 26px solid #1e90ff; filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.6)); transform-origin: 50% 65%; }
+.position.off { border-bottom-color: #d9534f; }
+#banner {
+  position: absolute; right: 12px; top: 12px; z-index: 1; min-width: 220px; max-width: 45%;
+  background: #1b4f9c; color: #fff; border-radius: 10px; padding: 10px 14px; box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+}
+#banner-dist { font-size: 26px; font-weight: 700; }
+#banner-text { font-size: 15px; margin-top: 2px; }
+#alerts { position: absolute; right: 12px; top: 110px; z-index: 1; display: flex; flex-direction: column; gap: 6px; max-width: 45%; }
+.alert { background: rgba(217, 83, 79, 0.95); color: #fff; padding: 8px 12px; border-radius: 8px; font-size: 14px; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); }
+.alert.bump { background: rgba(240, 150, 20, 0.95); }
+.alert.accident { background: rgba(120, 60, 180, 0.95); }
+.alert.toll { background: rgba(60, 120, 60, 0.95); }
+.check { font-size: 13px; display: flex; align-items: center; gap: 4px; }
+#instructions li.done { color: #aaa; }
+#instructions li.current { font-weight: 700; color: #1b4f9c; }
+#version { color: #999; font-size: 11px; margin-top: 4px; }

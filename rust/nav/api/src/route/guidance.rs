@@ -56,8 +56,25 @@ pub struct Warning {
     pub text: String,
 }
 
-/// 단속구분 비트. poi.rs의 enforce_bits와 같다
+/// 단속구분 비트. poi.rs의 enforce_bits와 같다. 1 속도, 2 신호, 4 통행위반, 8 불법주정차, 16 기타
 const ENFORCE_SPEED: u8 = 1;
+const ENFORCE_SIGNAL: u8 = 2;
+const ENFORCE_LANE: u8 = 4;
+
+/// 카메라의 단속 종류 문구. 속도와 신호가 같이 있으면 "신호·과속"이다
+pub fn camera_label(enforce: u8) -> &'static str {
+    match (
+        enforce & ENFORCE_SPEED != 0,
+        enforce & ENFORCE_SIGNAL != 0,
+        enforce & ENFORCE_LANE != 0,
+    ) {
+        (true, true, _) => "신호·과속 단속 카메라",
+        (true, false, _) => "과속 단속 카메라",
+        (false, true, _) => "신호 단속 카메라",
+        (false, false, true) => "통행위반 단속 카메라",
+        _ => "단속 카메라",
+    }
+}
 
 /// 안내 지점마다 안내문을 만든다. 고속도로 출구는 유도선 색을 찾아 문장 끝에 붙인다
 pub fn instructions(route: &Route, guide_lines: &GuideLineTable) -> Vec<Instruction> {
@@ -155,14 +172,18 @@ pub fn warnings(route: &Route, accident_sections: &[AccidentSection]) -> Vec<War
     let mut along = Vec::new();
     for poi in &route.pois {
         let (kind, text) = match poi.kind {
-            PoiKind::Camera if poi.enforce & ENFORCE_SPEED != 0 && poi.limit > 0 => (
-                WarningKind::SpeedCamera,
-                format!("과속 단속 카메라, 제한속도 {}", poi.limit),
-            ),
-            PoiKind::Camera if poi.enforce & ENFORCE_SPEED != 0 => {
-                (WarningKind::SpeedCamera, "과속 단속 카메라".to_string())
+            PoiKind::Camera => {
+                let kind = if poi.enforce & ENFORCE_SPEED != 0 {
+                    WarningKind::SpeedCamera
+                } else {
+                    WarningKind::Camera
+                };
+                let mut text = camera_label(poi.enforce).to_string();
+                if poi.limit > 0 {
+                    text.push_str(&format!(", 제한속도 {}", poi.limit));
+                }
+                (kind, text)
             }
-            PoiKind::Camera => (WarningKind::Camera, "단속 카메라".to_string()),
             PoiKind::Bump => (WarningKind::SpeedBump, "과속방지턱".to_string()),
         };
         along.push(Warning {
@@ -218,6 +239,15 @@ mod tests {
             branches: 3,
             clock,
         }
+    }
+
+    #[test]
+    fn camera_labels() {
+        assert_eq!(camera_label(1), "과속 단속 카메라");
+        assert_eq!(camera_label(2), "신호 단속 카메라");
+        assert_eq!(camera_label(3), "신호·과속 단속 카메라");
+        assert_eq!(camera_label(4), "통행위반 단속 카메라");
+        assert_eq!(camera_label(16), "단속 카메라");
     }
 
     #[test]
