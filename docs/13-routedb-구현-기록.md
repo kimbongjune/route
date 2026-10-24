@@ -50,6 +50,7 @@ rust/
     collector/handler.rs    GET /events SSE
     collector/traffic.rs    교통소통정보 타일 폴링, 속도 배율 변환
     collector/incident.rs   돌발상황정보 폴링, 전면·부분 통제 배율 변환
+    guideline/mod.rs        노면색깔유도선 표. 교차로 이름과 노선으로 출구의 유도선 색을 찾는다
     tiles/mod.rs            브이월드 타일 프록시 라우트
     tiles/handler.rs        GET /tiles/{layer}/{z}/{x}/{y}
   nav/web/
@@ -541,7 +542,7 @@ CCH 구조는 세 프로파일이 같고 metric만 다르므로 임포터가 거
 
 ### 안내문과 경고
 
-프론트가 현재 위치와 거리로 안내 시점을 정하고 서버는 문장을 만들기로 하여 `POST /route` 응답에 `instructions`와 `warnings`를 추가하였다. `route/guidance.rs`의 `instructions`는 안내 지점마다 거리, 위경도, 문장, 회전, 표지 색을 담은 `Instruction`을 만들며 문장은 "교차로 이름에서 회전, 도로명" 꼴이다. 교차로 이름은 그래프 파일의 `NODE_NAME`인데 교차로 이름이 없는 노드는 "하월곡동 26-14"처럼 지번이 들어 있으므로 `is_intersection_name`이 마지막 낱말이 숫자나 "숫자-숫자"로 끝나면 지번으로 보고 문장에서 뺀다. 회전 문구는 직진, 왼쪽 방향, 오른쪽 방향, 좌회전, 우회전, 유턴, 왼쪽 출구, 오른쪽 출구이며 분기가 4개 이상이면 "1시 방향"처럼 시계 방향으로 쓰고, 출구는 도로명 뒤에 "방면"을 붙인다. 서울역에서 강남역까지의 첫 안내문은 "남영역앞교차로에서 좌회전, 한강대로77길"이고 서울역에서 부산역까지 최소시간 경로의 신갈JC는 "신갈JC(북측)에서 오른쪽 출구, 영동고속도로 방면"이다.
+프론트가 현재 위치와 거리로 안내 시점을 정하고 서버는 문장을 만들기로 하여 `POST /route` 응답에 `instructions`와 `warnings`를 추가하였다. `route/guidance.rs`의 `instructions`는 안내 지점마다 거리, 위경도, 문장, 회전, 표지 색을 담은 `Instruction`을 만들며 문장은 "교차로 이름에서 회전, 도로명" 꼴이다. 교차로 이름은 그래프 파일의 `NODE_NAME`인데 교차로 이름이 없는 노드는 "하월곡동 26-14"처럼 지번이 들어 있으므로 `is_intersection_name`이 마지막 낱말이 숫자나 "숫자-숫자"로 끝나면 지번으로 보고 문장에서 뺀다. 회전 문구는 직진, 왼쪽 방향, 오른쪽 방향, 좌회전, 우회전, 유턴, 왼쪽 출구, 오른쪽 출구이며 분기가 4개 이상이면 "1시 방향"처럼 시계 방향으로 쓰고, 출구는 도로명 뒤에 "방면"을 붙인다. 서울역에서 강남역까지의 첫 안내문은 "남영역앞교차로에서 좌회전, 한강대로77길"이다. 고속도로 출구에는 14 문서의 노면색깔유도선 표에서 교차로 이름과 주행 도로의 노선으로 찾은 색을 "분홍색 유도선"처럼 붙이며 `Instruction`의 `guide_line`에도 넣는다. 서울역에서 부산역까지 최소시간 경로의 신갈JC는 "신갈JC(북측)에서 오른쪽 출구, 영동고속도로 방면, 분홍색 유도선"이고 금호JC 왼쪽 출구는 녹색 유도선이며, 자료에 없는 반포IC는 색 없이 "반포IC에서 오른쪽 출구, 경부고속도로 방면"이다.
 
 `warnings`는 경로 위 경고를 `Warning`의 종류, 거리, 문장으로 만든다. 종류는 과속 단속 카메라(단속구분에 속도가 포함된 카메라, 제한속도가 있으면 "제한속도 50"을 붙인다), 단속 카메라, 과속방지턱, 사고다발 구간(유형, 길이, 사고 건수 합), 요금소, 높이 제한, 하중 제한이다. 카메라·방지턱·사고다발 구간은 출발점부터의 거리 순서로 정렬하고 사고다발 구간은 끝 거리 `to_m`도 가지며, 경로 전체에 해당하는 높이·하중 제한은 거리 없이 맨 앞에 넣고 요금소는 수만 세어 맨 뒤에 넣는다. 서울역에서 강남역까지는 경고 43건으로 높이 제한 3.8m가 맨 앞이고 첫 거리 경고는 538m의 과속방지턱이며, 안내문과 경고를 더한 응답은 29,622바이트이다. 서울역에서 부산역까지 최소시간 경로는 경고 89건이고 맨 뒤가 요금소 4곳이다.
 
@@ -710,7 +711,7 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 
 ## 테스트
 
-`cargo test --workspace`로 50개를 실행한다. `geocode_api`는 `.env`의 키로 브이월드를 실제로 호출하며 키가 없으면 건너뛴다. `route_api`는 전국 그래프 파일을 열어 라우터에 요청을 보내므로 debug 빌드에서는 R-tree 생성에 129초가 소요되고 `cargo test --release -p nav-api`로는 3초이다.
+`cargo test --workspace`로 52개를 실행한다. `geocode_api`는 `.env`의 키로 브이월드를 실제로 호출하며 키가 없으면 건너뛴다. `route_api`는 전국 그래프 파일을 열어 라우터에 요청을 보내므로 debug 빌드에서는 R-tree 생성에 129초가 소요되고 `cargo test --release -p nav-api`로는 3초이다.
 
 | 파일 | 테스트 | 확인 내용 |
 |---|---|---|
@@ -745,13 +746,14 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 | `nav/api` `collector/mod.rs` | `stale_after_three_missed_polls` | 실패 두 번까지는 유지, 세 번째 간격부터 한 번만 되돌림, 성공하면 처음부터 다시 셈 |
 | `nav/api` `collector/incident.rs` | `block_levels`, `parse_items_and_errors` | 세부유형 23·26·31과 "전면" 문구는 전면 통제, 30과 "부분"·차단 차로는 부분 통제, 고장 01은 통제 없음, 기술기준 샘플 한 건 해석, 4005는 에러, 빈 본문은 빈 목록 |
 | `nav/api` `collector/traffic.rs` | `tiles_cover_korea`, `parse_items_and_errors` | 1.5도 타일 16개의 첫·끝 범위, 응답 두 건 해석, `resultCode` 4001은 에러, `items`가 null이면 빈 목록 |
+| `nav/api` `guideline/mod.rs` | `normalize_and_route`, `pick_color` | 신갈JC(북측)→신갈JC와 JCT→JC, 경부선과 경부고속도로 일치, 경부선 행의 오른쪽 색 분홍색·왼쪽 색 녹색, 오른쪽 색이 없으면 왼쪽 색, 색이 다른 행은 없음, 출구가 아니면 없음 |
 | `nav/api` `route/guidance.rs` | `intersection_names`, `step_texts` | 남영역앞교차로·신갈JC(북측)·반포IC는 교차로 이름이고 하월곡동 26-14·야당동1040은 지번, 좌회전·1시 방향·오른쪽 출구 방면·유턴 문장 |
 | `nav/api` `accident/index.rs` | `sections_along_route`, `parse_ring_rejects_bad_text` | 겹치는 정사각형 두 개가 한 구간이고 경계에 닿는 선분까지 0~500m, 떨어진 정사각형은 600~1,000m, 밖을 지나면 없음, 점 3개 미만과 숫자 아닌 좌표는 에러 |
 | `nav/api` `geocode/service.rs` | `parse_place_and_not_found` | 브이월드 PLACE 응답의 서울역 한 건 변환과 좌표 없는 건 제외, NOT_FOUND는 빈 목록, ERROR는 502 |
 | `nav/api` `tests/geocode_api.rs` | `geocode_requests` | 서울역 장소 검색의 첫 결과와 좌표 범위, 한강대로 405 주소 검색, 없는 장소는 빈 목록, 빈 검색어는 400 |
 | `nav/api` `tests/route_api.rs` | `update_channel_applies_and_broadcasts` | 채널로 보낸 전면 통제 묶음이 적용되어 순번 1 이벤트가 오고 경로가 그 링크를 피함, 돌발 배율 되돌리기 뒤 순번 2 `reset` 이벤트와 처음 경로 복귀 |
 | `nav/api` `tests/route_api.rs` | `weight_updates_change_route` | 가운데 링크 전면 통제 뒤 경로가 그 링크를 피함, 속도 배율 2 뒤 시간 증가와 거리 경로 불변, 되돌리면 처음과 같음 |
-| `nav/api` `tests/route_api.rs` | `route_requests` | 서울역→강남역 링크 104개와 첫 안내 좌회전 한강대로77길, 서울역→부산역 최소시간 영업소 4곳, 사고다발 구간이 있고 시작 거리가 끝 거리 이하, 안내문 7개와 첫 안내문 "남영역앞교차로에서 좌회전, 한강대로77길", 경고 맨 앞이 높이 제한 3.8m이고 거리 순서, 바다 출발 404 ROUTE_NOT_FOUND, 위도 91과 프로파일 fast는 400 BAD_REQUEST, 없는 주소 404 NOT_FOUND |
+| `nav/api` `tests/route_api.rs` | `route_requests` | 서울역→강남역 링크 104개와 첫 안내 좌회전 한강대로77길, 서울역→부산역 최소시간 영업소 4곳과 신갈JC 분홍색 유도선 안내문, 사고다발 구간이 있고 시작 거리가 끝 거리 이하, 안내문 7개와 첫 안내문 "남영역앞교차로에서 좌회전, 한강대로77길", 경고 맨 앞이 높이 제한 3.8m이고 거리 순서, 바다 출발 404 ROUTE_NOT_FOUND, 위도 91과 프로파일 fast는 400 BAD_REQUEST, 없는 주소 404 NOT_FOUND |
 | `file.rs` | `write_and_open_same_graph`, `open_other_file` | 저장 후 다시 열면 배열 35개 일치, 교차로 이름 가교차로, 가→라 링크의 높이 450cm·하중 4,500kg·트럭 금지·제한속도 30·도로등급 104·연결로, 지점 2개의 배열과 간선별 범위, 도로명 3개와 가→라 링크의 도로명 능안로, 다른 파일은 에러 |
 
 ## 실행
@@ -779,4 +781,5 @@ python -X utf8 scripts/nodelink/uturn_rule_check.py
 python -X utf8 scripts/nodelink/kakao_route_compare.py
 python -X utf8 scripts/nodelink/kakao_guide_compare.py
 python -X utf8 scripts/accident/build_polygons.py
+python -X utf8 scripts/guideline/build_guide_lines.py
 ```

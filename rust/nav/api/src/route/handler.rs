@@ -14,6 +14,6 @@ pub async fn create(
     State(state): State<AppState>,
     ApiJson(input): ApiJson<RouteRequest>,
 ) -> Result<ApiResponse<RouteResponse>, AppError> {
-    let response = service::find_route(state.db, state.accidents, input).await?;
+    let response = service::find_route(state.db, state.accidents, state.guide_lines, input).await?;
     Ok(ApiResponse::ok(response))
 }

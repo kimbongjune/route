@@ -5,6 +5,7 @@ use routedb_core::route::{PoiKind, Route, SignColor, Step, Turn};
 use serde::Serialize;
 
 use crate::accident::model::AccidentSection;
+use crate::guideline::GuideLineTable;
 
 /// 안내 지점 한 곳의 안내문
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -19,6 +20,9 @@ pub struct Instruction {
     pub turn: Turn,
     /// 표지 색
     pub sign: SignColor,
+    /// 고속도로 출구의 노면색깔유도선 색. 없으면 None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guide_line: Option<String>,
 }
 
 /// 경고 종류
@@ -55,18 +59,28 @@ pub struct Warning {
 /// 단속구분 비트. poi.rs의 enforce_bits와 같다
 const ENFORCE_SPEED: u8 = 1;
 
-/// 안내 지점마다 안내문을 만든다
-pub fn instructions(route: &Route) -> Vec<Instruction> {
+/// 안내 지점마다 안내문을 만든다. 고속도로 출구는 유도선 색을 찾아 문장 끝에 붙인다
+pub fn instructions(route: &Route, guide_lines: &GuideLineTable) -> Vec<Instruction> {
     route
         .steps
         .iter()
-        .map(|step| Instruction {
-            at_m: step.at_m,
-            lat: step.lat,
-            lon: step.lon,
-            text: step_text(step),
-            turn: step.turn,
-            sign: step.sign,
+        .map(|step| {
+            let guide_line = guide_lines.color_for(&step.node_name, &step.from_name, step.turn);
+            let mut text = step_text(step);
+            if let Some(color) = &guide_line {
+                text.push_str(", ");
+                text.push_str(color);
+                text.push_str(" 유도선");
+            }
+            Instruction {
+                at_m: step.at_m,
+                lat: step.lat,
+                lon: step.lon,
+                text,
+                turn: step.turn,
+                sign: step.sign,
+                guide_line,
+            }
         })
         .collect()
 }

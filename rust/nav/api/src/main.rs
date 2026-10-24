@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use nav_api::accident::index::AccidentIndex;
 use nav_api::collector;
+use nav_api::guideline::GuideLineTable;
 use nav_api::state::AppState;
 use routedb_core::route::RouteDb;
 use tokio::sync::broadcast;
@@ -21,6 +22,8 @@ const DEFAULT_GRAPH_DIR: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb"
 const DEFAULT_ADDR: &str = "127.0.0.1:3000";
 const DEFAULT_ACCIDENT_FILE: &str =
     r"C:\Users\nocdu\Desktop\dev\route\maps\전국교통사고다발지역표준데이터\사고다발_폴리곤.csv";
+const DEFAULT_GUIDE_LINE_FILE: &str =
+    r"C:\Users\nocdu\Desktop\dev\route\maps\유도선\유도선_노드.csv";
 const ENV_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../.env");
 
 /// 그래프 폴더의 파일 다섯 개로 `RouteDb`를 연다
@@ -60,6 +63,7 @@ async fn main() {
     let dir = Path::new(args.first().map_or(DEFAULT_GRAPH_DIR, String::as_str));
     let addr = args.get(1).map_or(DEFAULT_ADDR, String::as_str);
     let accident_file = Path::new(args.get(2).map_or(DEFAULT_ACCIDENT_FILE, String::as_str));
+    let guide_line_file = Path::new(args.get(3).map_or(DEFAULT_GUIDE_LINE_FILE, String::as_str));
     let vworld_key = env_value("VWORLD_API_KEY").expect("VWORLD_API_KEY가 없음");
 
     let started = Instant::now();
@@ -75,6 +79,9 @@ async fn main() {
         accidents.len(),
         started.elapsed().as_secs_f64()
     );
+
+    let guide_lines = GuideLineTable::load(guide_line_file).expect("유도선 파일을 읽지 못함");
+    println!("노면색깔유도선 {}행", guide_lines.len());
 
     let db = Arc::new(db);
     let http = reqwest::Client::new();
@@ -111,6 +118,7 @@ async fn main() {
     let app = nav_api::app(AppState {
         db,
         accidents: Arc::new(accidents),
+        guide_lines: Arc::new(guide_lines),
         http,
         vworld_key,
         updates,

@@ -10,6 +10,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use nav_api::accident::index::AccidentIndex;
 use nav_api::collector::{self, Batch};
+use nav_api::guideline::GuideLineTable;
 use nav_api::state::AppState;
 use routedb_core::route::{RouteDb, WeightUpdate};
 use serde_json::{Value, json};
@@ -17,6 +18,7 @@ use tokio::sync::broadcast;
 use tower::ServiceExt;
 
 const GRAPH_DIR: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb";
+const GUIDE_LINE_FILE: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\유도선\유도선_노드.csv";
 const ACCIDENT_FILE: &str =
     r"C:\Users\nocdu\Desktop\dev\route\maps\전국교통사고다발지역표준데이터\사고다발_폴리곤.csv";
 
@@ -51,6 +53,9 @@ fn app_with_state() -> (Router, Arc<RouteDb>, AppState) {
     let state = AppState {
         db: Arc::clone(&db),
         accidents: Arc::new(accidents),
+        guide_lines: Arc::new(
+            GuideLineTable::load(Path::new(GUIDE_LINE_FILE)).expect("유도선 파일을 읽지 못함"),
+        ),
         http: reqwest::Client::new(),
         vworld_key: String::new(),
         updates,
@@ -142,6 +147,21 @@ async fn route_requests() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"]["tolls"].as_array().map(Vec::len), Some(4));
+    // 고속도로 출구 안내에 유도선 색이 붙는다
+    let texts: Vec<&str> = body["data"]["instructions"]
+        .as_array()
+        .expect("instructions")
+        .iter()
+        .filter_map(|i| i["text"].as_str())
+        .collect();
+    assert!(
+        texts.contains(&"신갈JC(북측)에서 오른쪽 출구, 영동고속도로 방면, 분홍색 유도선"),
+        "{texts:?}"
+    );
+    assert!(
+        texts.contains(&"반포IC에서 오른쪽 출구, 경부고속도로 방면"),
+        "{texts:?}"
+    );
 
     // 바다 위 출발점은 경로가 없다
     let (status, body) = send(

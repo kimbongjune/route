@@ -5,6 +5,7 @@ use tokio::sync::broadcast;
 
 use crate::accident::index::AccidentIndex;
 use crate::collector::{UpdateSender, WeightEvent};
+use crate::guideline::GuideLineTable;
 
 /// 앱 전체에서 공유하는 상태. `RouteDb`와 `AccidentIndex`는 `Arc`, `reqwest::Client`와 채널은 내부가 `Arc`라 Clone이 가볍다
 #[derive(Clone)]
@@ -12,6 +13,8 @@ pub struct AppState {
     pub db: Arc<RouteDb>,
     /// 사고다발 폴리곤 색인
     pub accidents: Arc<AccidentIndex>,
+    /// 노면색깔유도선 표
+    pub guide_lines: Arc<GuideLineTable>,
     /// 브이월드 호출용 HTTP 클라이언트
     pub http: reqwest::Client,
     /// 브이월드 인증키

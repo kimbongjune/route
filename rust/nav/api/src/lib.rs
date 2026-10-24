@@ -5,6 +5,7 @@ pub mod collector;
 pub mod error;
 pub mod extract;
 pub mod geocode;
+pub mod guideline;
 pub mod response;
 pub mod route;
 pub mod state;

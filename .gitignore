@@ -4,3 +4,6 @@ target/
 maps/**
 !maps/**/
 !maps/**/.gitkeep
+
+# 확인용 캡처
+/image*.png

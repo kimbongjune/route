@@ -9,11 +9,13 @@ use super::guidance;
 use super::model::{LatLon, RouteRequest, RouteResponse};
 use crate::accident::index::AccidentIndex;
 use crate::error::AppError;
+use crate::guideline::GuideLineTable;
 
 /// 요청을 검증하고 블로킹 스레드에서 경로를 탐색한 뒤 경로가 지나는 사고다발 구간을 붙인다
 pub async fn find_route(
     db: Arc<RouteDb>,
     accidents: Arc<AccidentIndex>,
+    guide_lines: Arc<GuideLineTable>,
     input: RouteRequest,
 ) -> Result<RouteResponse, AppError> {
     validate_lat_lon(input.from)?;
@@ -31,7 +33,7 @@ pub async fn find_route(
         );
         let route = route.map(|route| {
             let accident_sections = accidents.sections(&route.geometry, route.distance_m);
-            let instructions = guidance::instructions(&route);
+            let instructions = guidance::instructions(&route, &guide_lines);
             let warnings = guidance::warnings(&route, &accident_sections);
             (route, accident_sections, instructions, warnings)
         });
