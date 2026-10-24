@@ -2,6 +2,7 @@ use routedb_core::route::{Profile, Route};
 use serde::{Deserialize, Serialize};
 
 use super::guidance::{Instruction, Warning};
+use super::toll::TollFee;
 use crate::accident::model::AccidentSection;
 
 /// 위경도. `heading`은 진행 방위각(진북 0, 시계 방향 0~360도)이며 출발지에서만 사용한다
@@ -26,12 +27,14 @@ fn default_profile() -> Profile {
     Profile::Distance
 }
 
-/// `POST /route` 응답. `Route`의 필드에 경로가 지나는 사고다발 구간, 안내문, 경고, 탐색 시간을 더한다
+/// `POST /route` 응답. `Route`의 필드에 경로가 지나는 사고다발 구간, 통행료, 안내문, 경고, 탐색 시간을 더한다
 #[derive(Serialize)]
 pub struct RouteResponse {
     #[serde(flatten)]
     pub route: Route,
     pub accident_sections: Vec<AccidentSection>,
+    /// 1종 기준 통행료. 구간별 요금과 요금을 정하지 못한 영업소
+    pub toll: TollFee,
     /// 안내 지점마다의 안내문. `steps`와 같은 순서
     pub instructions: Vec<Instruction>,
     /// 경로 위 경고. 거리 순서이며 경로 전체 통과제한은 맨 앞, 요금소는 맨 뒤

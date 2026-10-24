@@ -4,6 +4,7 @@
 use routedb_core::route::{PoiKind, Route, SignColor, Step, Turn};
 use serde::Serialize;
 
+use super::toll::{StopKind, TollFee};
 use crate::accident::model::AccidentSection;
 use crate::guideline::GuideLineTable;
 
@@ -150,8 +151,13 @@ pub fn is_intersection_name(name: &str) -> bool {
         && tail.chars().any(|c| c.is_ascii_digit()))
 }
 
-/// 경로 위 경고를 거리 순서로 만든다. 경로 전체에 해당하는 통과제한은 맨 앞이다
-pub fn warnings(route: &Route, accident_sections: &[AccidentSection]) -> Vec<Warning> {
+/// 경로 위 경고를 거리 순서로 만든다. 경로 전체에 해당하는 통과제한은 맨 앞이다.
+/// 요금소는 지나는 자리마다 하나이며 요금이 정해지는 출구에는 금액을, 입구에는 "진입"을 넣는다
+pub fn warnings(
+    route: &Route,
+    accident_sections: &[AccidentSection],
+    toll: &TollFee,
+) -> Vec<Warning> {
     let mut out = Vec::new();
     if route.min_height_cm > 0 {
         out.push(Warning {
@@ -207,16 +213,25 @@ pub fn warnings(route: &Route, accident_sections: &[AccidentSection]) -> Vec<War
             ),
         });
     }
-    along.sort_by(|a, b| a.at_m.unwrap_or(0.0).total_cmp(&b.at_m.unwrap_or(0.0)));
-    out.extend(along);
-    if !route.tolls.is_empty() {
-        out.push(Warning {
+    for stop in &toll.stops {
+        let text = match stop.kind {
+            StopKind::Entry => format!("{} 요금소 진입", stop.name),
+            StopKind::Exit => format!(
+                "{} 요금소, {}부터 통행료 {}원",
+                stop.name, stop.entry_name, stop.won
+            ),
+            StopKind::Open => format!("{} 요금소, 통행료 {}원", stop.name, stop.won),
+            StopKind::Unknown => format!("{} 요금소, 요금 미확인", stop.name),
+        };
+        along.push(Warning {
             kind: WarningKind::Toll,
-            at_m: None,
+            at_m: Some(stop.at_m),
             to_m: None,
-            text: format!("요금소 {}곳", route.tolls.len()),
+            text,
         });
     }
+    along.sort_by(|a, b| a.at_m.unwrap_or(0.0).total_cmp(&b.at_m.unwrap_or(0.0)));
+    out.extend(along);
     out
 }
 

@@ -11,6 +11,7 @@ use http_body_util::BodyExt;
 use nav_api::accident::index::AccidentIndex;
 use nav_api::collector::{self, Batch};
 use nav_api::guideline::GuideLineTable;
+use nav_api::route::toll::TollTable;
 use nav_api::state::AppState;
 use routedb_core::route::{RouteDb, WeightUpdate};
 use routedb_geocode::GeocodeIndex;
@@ -22,6 +23,7 @@ const GRAPH_DIR: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb";
 const GUIDE_LINE_FILE: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\유도선\유도선_노드.csv";
 const ACCIDENT_FILE: &str =
     r"C:\Users\nocdu\Desktop\dev\route\maps\전국교통사고다발지역표준데이터\사고다발_폴리곤.csv";
+const TOLL_DIR: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\유료도로";
 
 fn app() -> Router {
     app_with_db().0
@@ -59,6 +61,13 @@ fn app_with_state() -> (Router, Arc<RouteDb>, AppState) {
         ),
         geocoder: Arc::new(
             GeocodeIndex::open(&dir.join("geocode.idx")).expect("지오코더 색인을 열지 못함"),
+        ),
+        tolls: Arc::new(
+            TollTable::load(
+                &Path::new(TOLL_DIR).join("영업소.csv"),
+                &Path::new(TOLL_DIR).join("요금표.csv"),
+            )
+            .expect("통행료 표를 읽지 못함"),
         ),
         http: reqwest::Client::new(),
         vworld_key: String::new(),
@@ -184,7 +193,7 @@ async fn route_requests() {
         .collect();
     eprintln!("사고다발 구간 {}", Value::Array(summary));
 
-    // 서울역→부산역 최소시간 경로는 영업소 4곳을 지난다
+    // 서울역→부산역 최소시간 경로는 영업소 4곳을 지나고 통행료가 있다
     let (status, body) = send(
         &app,
         "POST",
@@ -194,6 +203,16 @@ async fn route_requests() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"]["tolls"].as_array().map(Vec::len), Some(4));
+    let toll = &body["data"]["toll"];
+    eprintln!("통행료 {}", toll);
+    assert!(toll["won"].as_u64().unwrap_or(0) > 0, "{toll}");
+    assert!(
+        body["data"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["kind"] == "toll" && w["at_m"].is_number())
+    );
     // 고속도로 출구 안내에 유도선 색이 붙는다
     let texts: Vec<&str> = body["data"]["instructions"]
         .as_array()

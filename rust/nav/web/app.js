@@ -4,7 +4,7 @@
 const TILE_URL = `${location.origin}/tiles/base/{z}/{x}/{y}`;
 const SEOUL_STATION = [126.9707, 37.5547];
 // 자체 지도 스타일. 소스와 레이어를 style-day.json에서 읽고 {origin}을 이 서버 주소로 바꾼다. 화면 버전과 같이 올린다
-const STYLE_VERSION = "10";
+const STYLE_VERSION = "11";
 const EMAP_STYLE = JSON.parse(
   (await (await fetch(`style-day.json?v=${STYLE_VERSION}`)).text()).replaceAll("{origin}", location.origin),
 );
@@ -232,7 +232,9 @@ async function requestRoute() {
 function showRouteInfo(route) {
   const minutes = Math.round(route.duration_s / 60);
   const km = (route.distance_m / 1000).toFixed(1);
-  summary.textContent = `${km}km · ${minutes}분 · 안내 ${route.instructions.length}곳 · 경고 ${route.warnings.length}건 · ${route.elapsed_ms.toFixed(0)}ms`;
+  const toll = route.toll && route.toll.won > 0 ? ` · 통행료 ${route.toll.won.toLocaleString()}원` : "";
+  const unknown = route.toll && route.toll.unknown.length ? ` · 요금 미확인 ${route.toll.unknown.length}곳` : "";
+  summary.textContent = `${km}km · ${minutes}분${toll}${unknown} · 안내 ${route.instructions.length}곳 · 경고 ${route.warnings.length}건 · ${route.elapsed_ms.toFixed(0)}ms`;
   summary.hidden = false;
   instructionsList.innerHTML = "";
   for (const instruction of route.instructions) {
@@ -526,7 +528,10 @@ function warningSpeech(w, ahead, last = false) {
     return `${head} ${w.text.split(",")[0]}입니다${limit ? `. 제한 속도 ${limit[1]}` : ""}`;
   }
   if (w.kind === "speed_bump") return "과속방지턱입니다";
-  if (w.kind === "toll") return "전방에 요금소가 있습니다";
+  if (w.kind === "toll") {
+    const won = w.text.match(/통행료 (\d+)원/);
+    return won ? `전방에 요금소가 있습니다. 통행료 ${Number(won[1]).toLocaleString()}원` : "전방에 요금소가 있습니다";
+  }
   return null;
 }
 // 진행 방향을 위로 두는 카메라의 기울기. 브이월드 래스터 타일은 글자가 같이 돌아가므로 기본은 북쪽이 위이고 체크하면 돈다

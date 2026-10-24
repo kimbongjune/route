@@ -59,6 +59,13 @@ pub struct Section {
     pub to_m: f64,
 }
 
+/// 지나는 요금소. 영업소코드와 요금 링크 가운데의 출발점부터의 거리이다
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TollPass {
+    pub unit: u32,
+    pub at_m: f64,
+}
+
 /// 회전 방향. 각도는 진행 방향 기준이며 시계 방향이 양수이다.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -348,8 +355,8 @@ pub struct Route {
     pub links: Vec<u64>,
     /// 경로 좌표 (위도, 경도)
     pub geometry: Vec<(f64, f64)>,
-    /// 지나는 요금소의 영업소코드. 바로 앞 링크에도 있던 영업소코드는 같은 요금소이므로 한 번만 넣는다
-    pub tolls: Vec<u32>,
+    /// 지나는 요금소. 바로 앞 링크에도 있던 영업소코드는 같은 요금소이므로 한 번만 넣는다
+    pub tolls: Vec<TollPass>,
     /// 경로 위 카메라와 방지턱. 불법주정차만 단속하는 카메라는 뺀다
     pub pois: Vec<RoutePoi>,
     /// 같은 도로명이 이어지는 구간
@@ -805,7 +812,7 @@ impl RouteDb {
         let single = edges.len() == 1;
         let mut geometry = Vec::new();
         let mut pois = Vec::new();
-        let mut tolls: Vec<u32> = Vec::new();
+        let mut tolls: Vec<TollPass> = Vec::new();
         let mut prev: &[u32] = &[];
         let mut duration_ms = 0.0;
         let mut walked = 0.0;
@@ -836,7 +843,14 @@ impl RouteDb {
             duration_ms += profile::link_time_ms(length, max_spd, e) * part;
             // 요금소
             let cur = file.tolls_of(e);
-            tolls.extend(cur.iter().filter(|u| !prev.contains(u)));
+            tolls.extend(
+                cur.iter()
+                    .filter(|u| !prev.contains(u))
+                    .map(|&unit| TollPass {
+                        unit,
+                        at_m: walked + part * length[e] / 2.0,
+                    }),
+            );
             prev = cur;
             // 통과제한
             let (h, w, v) = (file.rest_h()[e], file.rest_w()[e], file.rest_veh()[e]);

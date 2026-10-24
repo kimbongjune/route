@@ -98,7 +98,7 @@ fn main() {
         route
             .tolls
             .iter()
-            .map(|u| format!("{u:03}"))
+            .map(|t| format!("{:03}@{:.0}m", t.unit, t.at_m))
             .collect::<Vec<_>>()
             .join(" ")
     );

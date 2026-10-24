@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use nav_api::accident::index::AccidentIndex;
 use nav_api::collector;
 use nav_api::guideline::GuideLineTable;
+use nav_api::route::toll::TollTable;
 use nav_api::state::AppState;
 use routedb_core::route::RouteDb;
 use routedb_geocode::GeocodeIndex;
@@ -109,6 +110,15 @@ async fn main() {
     let guide_lines = GuideLineTable::load(&guide_line_file).expect("유도선 파일을 읽지 못함");
     println!("노면색깔유도선 {}행", guide_lines.len());
 
+    let toll_dir = maps.join("유료도로");
+    let tolls = TollTable::load(&toll_dir.join("영업소.csv"), &toll_dir.join("요금표.csv"))
+        .expect("통행료 표를 읽지 못함");
+    println!(
+        "통행료 영업소 {} 쌍 {}",
+        tolls.unit_count(),
+        tolls.pair_count()
+    );
+
     let started = Instant::now();
     let geocoder = GeocodeIndex::open(&dir.join("geocode.idx")).expect("지오코더 색인을 열지 못함");
     println!(
@@ -155,6 +165,7 @@ async fn main() {
         accidents: Arc::new(accidents),
         guide_lines: Arc::new(guide_lines),
         geocoder: Arc::new(geocoder),
+        tolls: Arc::new(tolls),
         http,
         vworld_key,
         geoserver_url,

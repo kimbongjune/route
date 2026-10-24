@@ -4,6 +4,7 @@ pub mod guidance;
 mod handler;
 pub mod model;
 pub mod service;
+pub mod toll;
 
 use axum::Router;
 use axum::routing::post;

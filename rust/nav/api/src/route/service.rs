@@ -7,15 +7,17 @@ use routedb_core::route::RouteDb;
 
 use super::guidance;
 use super::model::{LatLon, RouteRequest, RouteResponse};
+use super::toll::TollTable;
 use crate::accident::index::AccidentIndex;
 use crate::error::AppError;
 use crate::guideline::GuideLineTable;
 
-/// 요청을 검증하고 블로킹 스레드에서 경로를 탐색한 뒤 경로가 지나는 사고다발 구간을 붙인다
+/// 요청을 검증하고 블로킹 스레드에서 경로를 탐색한 뒤 경로가 지나는 사고다발 구간과 통행료를 더한다
 pub async fn find_route(
     db: Arc<RouteDb>,
     accidents: Arc<AccidentIndex>,
     guide_lines: Arc<GuideLineTable>,
+    tolls: Arc<TollTable>,
     input: RouteRequest,
 ) -> Result<RouteResponse, AppError> {
     validate_lat_lon(input.from)?;
@@ -34,19 +36,21 @@ pub async fn find_route(
         );
         let route = route.map(|route| {
             let accident_sections = accidents.sections(&route.geometry, route.distance_m);
+            let toll = tolls.fee(&route.tolls, 0);
             let instructions = guidance::instructions(&route, &guide_lines);
-            let warnings = guidance::warnings(&route, &accident_sections);
-            (route, accident_sections, instructions, warnings)
+            let warnings = guidance::warnings(&route, &accident_sections, &toll);
+            (route, accident_sections, toll, instructions, warnings)
         });
         (route, started.elapsed().as_secs_f64() * 1000.0)
     })
     .await
     .expect("탐색 작업이 중단됨");
-    let (route, accident_sections, instructions, warnings) =
+    let (route, accident_sections, toll, instructions, warnings) =
         route.ok_or(AppError::RouteNotFound)?;
     Ok(RouteResponse {
         route,
         accident_sections,
+        toll,
         instructions,
         warnings,
         elapsed_ms,

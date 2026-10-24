@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use routedb_core::route::RouteDb;
 use routedb_geocode::GeocodeIndex;
+
+use crate::route::toll::TollTable;
 use tokio::sync::broadcast;
 
 use crate::accident::index::AccidentIndex;
@@ -18,6 +20,8 @@ pub struct AppState {
     pub guide_lines: Arc<GuideLineTable>,
     /// 지오코더 색인
     pub geocoder: Arc<GeocodeIndex>,
+    /// 통행료 영업소·요금표
+    pub tolls: Arc<TollTable>,
     /// 바깥 API 호출용 HTTP 클라이언트
     pub http: reqwest::Client,
     /// 브이월드 인증키. 배경지도 타일 프록시에 사용한다
