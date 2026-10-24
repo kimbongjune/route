@@ -3,10 +3,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use routedb_core::route::RouteDb;
+use routedb_core::route::{Profile, RouteDb};
 
 use super::guidance;
-use super::model::{LatLon, RouteRequest, RouteResponse};
+use super::model::{Candidate, LatLon, RouteRequest, RouteResponse, RoutesResponse};
 use super::toll::TollTable;
 use crate::accident::index::AccidentIndex;
 use crate::error::AppError;
@@ -55,6 +55,69 @@ pub async fn find_route(
         warnings,
         elapsed_ms,
     })
+}
+
+/// 세 프로파일의 경로를 모두 구해 같은 링크 열은 하나로 묶고, 가장 빠른·짧은·싼 후보를 표시한다.
+/// 경로를 하나도 찾지 못하면 RouteNotFound이다. 요청의 profile은 쓰지 않는다
+pub async fn find_routes(
+    db: Arc<RouteDb>,
+    accidents: Arc<AccidentIndex>,
+    guide_lines: Arc<GuideLineTable>,
+    tolls: Arc<TollTable>,
+    input: RouteRequest,
+) -> Result<RoutesResponse, AppError> {
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for profile in [Profile::Time, Profile::Distance, Profile::Free] {
+        let request = RouteRequest { profile, ..input };
+        let found = find_route(
+            Arc::clone(&db),
+            Arc::clone(&accidents),
+            Arc::clone(&guide_lines),
+            Arc::clone(&tolls),
+            request,
+        )
+        .await;
+        let route = match found {
+            Ok(route) => route,
+            Err(AppError::RouteNotFound) => continue,
+            Err(e) => return Err(e),
+        };
+        match candidates
+            .iter_mut()
+            .find(|c| c.route.route.links == route.route.links)
+        {
+            Some(same) => same.profiles.push(profile),
+            None => candidates.push(Candidate {
+                profiles: vec![profile],
+                fastest: false,
+                shortest: false,
+                cheapest: false,
+                route,
+            }),
+        }
+    }
+    if candidates.is_empty() {
+        return Err(AppError::RouteNotFound);
+    }
+    let fastest = candidates
+        .iter()
+        .map(|c| c.route.route.duration_s)
+        .fold(f64::INFINITY, f64::min);
+    let shortest = candidates
+        .iter()
+        .map(|c| c.route.route.distance_m)
+        .fold(f64::INFINITY, f64::min);
+    let cheapest = candidates
+        .iter()
+        .filter(|c| c.route.toll.unknown.is_empty())
+        .map(|c| c.route.toll.won)
+        .min();
+    for c in &mut candidates {
+        c.fastest = c.route.route.duration_s == fastest;
+        c.shortest = c.route.route.distance_m == shortest;
+        c.cheapest = c.route.toll.unknown.is_empty() && Some(c.route.toll.won) == cheapest;
+    }
+    Ok(RoutesResponse { candidates })
 }
 
 /// 위도 -90~90, 경도 -180~180, 방위각 0~360 범위를 확인한다

@@ -4,7 +4,7 @@
 const TILE_URL = `${location.origin}/tiles/base/{z}/{x}/{y}`;
 const SEOUL_STATION = [126.9707, 37.5547];
 // 자체 지도 스타일. 소스와 레이어를 style-day.json에서 읽고 {origin}을 이 서버 주소로 바꾼다. 화면 버전과 같이 올린다
-const STYLE_VERSION = "11";
+const STYLE_VERSION = "13";
 const EMAP_STYLE = JSON.parse(
   (await (await fetch(`style-day.json?v=${STYLE_VERSION}`)).text()).replaceAll("{origin}", location.origin),
 );
@@ -53,6 +53,9 @@ const el = (id) => document.getElementById(id);
 const status = el("status");
 const results = el("results");
 const summary = el("summary");
+const candidatesList = el("candidates");
+// /routes가 준 후보 경로. 목록에서 고르면 그 경로를 쓴다
+let candidates = [];
 const instructionsList = el("instructions");
 const routeButton = el("route-button");
 
@@ -192,9 +195,6 @@ el("from-here").addEventListener("click", () => {
 });
 
 routeButton.addEventListener("click", requestRoute);
-el("profile").addEventListener("change", () => {
-  if (points.from && points.to) requestRoute();
-});
 
 // POST /route. 출발지에 방위각이 있으면 함께 보낸다
 async function fetchRoute(from, to, profile) {
@@ -212,20 +212,57 @@ async function fetchRoute(from, to, profile) {
 }
 
 // 경로 요청과 표시
+// 세 프로파일의 후보를 한 번에 받아 비교 목록을 보이고 가장 빠른 후보를 먼저 고른다
 async function requestRoute() {
   if (!(points.from && points.to)) return;
   setStatus("경로 탐색 중");
-  const result = await fetchRoute(points.from, points.to, el("profile").value);
+  const body = { from: { lat: points.from.lat, lon: points.from.lon }, to: { lat: points.to.lat, lon: points.to.lon } };
+  if (Number.isFinite(points.from.heading)) body.from.heading = points.from.heading;
+  const response = await fetch("/routes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const result = await response.json();
   if (result.code !== "OK") {
     setStatus(`${result.message} (${result.code})`);
     clearRoute();
     return;
   }
-  route = result.data;
-  drawRoute(route, true);
+  candidates = result.data.candidates;
+  const index = Math.max(0, candidates.findIndex((c) => c.fastest));
+  showCandidates(index);
+  selectCandidate(index, true);
+}
+
+function selectCandidate(index, fit) {
+  route = candidates[index];
+  drawRoute(route, fit);
   prepareTracking(route);
   showRouteInfo(route);
-  setStatus(`${profileName(route.profile)} 경로`);
+  candidatesList.querySelectorAll("li").forEach((li, i) => li.classList.toggle("selected", i === index));
+  setStatus(`${route.profiles.map(profileName).join("·")} 경로`);
+}
+
+// 후보 비교 목록. 시간, 거리, 통행료와 가장 빠름·짧음·저렴 표시
+function showCandidates(selected) {
+  candidatesList.innerHTML = "";
+  candidates.forEach((c, i) => {
+    const li = document.createElement("li");
+    const tags = [];
+    if (c.fastest) tags.push("가장 빠름");
+    if (c.shortest) tags.push("가장 짧음");
+    if (c.cheapest) tags.push("최소 요금");
+    const toll = c.toll.unknown.length ? `통행료 ${c.toll.won.toLocaleString()}원+미확인` : c.toll.won > 0 ? `통행료 ${c.toll.won.toLocaleString()}원` : "무료";
+    li.innerHTML = `<span class="name"></span><span>${Math.round(c.duration_s / 60)}분</span><span>${(c.distance_m / 1000).toFixed(1)}km</span><span>${toll}</span>`;
+    li.querySelector(".name").textContent = c.profiles.map(profileName).join("·");
+    for (const tag of tags) {
+      const span = document.createElement("span");
+      span.className = "tag best";
+      span.textContent = tag;
+      li.appendChild(span);
+    }
+    if (i === selected) li.classList.add("selected");
+    li.addEventListener("click", () => selectCandidate(i, false));
+    candidatesList.appendChild(li);
+  });
+  candidatesList.hidden = candidates.length === 0;
 }
 
 // 요약과 안내문 목록
@@ -306,6 +343,9 @@ function clearRoute() {
   }
   summary.hidden = true;
   instructionsList.hidden = true;
+  candidates = [];
+  candidatesList.hidden = true;
+  candidatesList.innerHTML = "";
 }
 
 map.on("load", () => setStatus("출발과 도착을 검색하거나 지도를 클릭"));
@@ -372,6 +412,8 @@ function prepareTracking(route) {
 
 // 추적 중에 경로를 새 것으로 바꾼다. 말한 안내와 이탈 상태를 처음으로 되돌리고 시뮬레이션은 새 경로의 처음부터 간다
 function replaceRoute(data) {
+  // 재탐색 응답은 /route 한 건이라 후보 목록의 profiles가 없다. 다음 재탐색이 같은 프로파일을 쓰도록 넣는다
+  if (!data.profiles) data.profiles = [data.profile];
   route = data;
   track = buildTrack(route);
   drawRoute(route, false);
@@ -396,7 +438,7 @@ async function reroute(lat, lon) {
   speak("경로를 이탈하여 재탐색합니다");
   setStatus("경로 이탈, 재탐색 중");
   try {
-    const result = await fetchRoute({ lat, lon, heading }, points.to, el("profile").value);
+    const result = await fetchRoute({ lat, lon, heading }, points.to, route.profiles[0]);
     if (result.code !== "OK") {
       setStatus(`재탐색 실패: ${result.message}`);
       return;

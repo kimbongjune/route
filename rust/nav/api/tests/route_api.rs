@@ -213,6 +213,27 @@ async fn route_requests() {
             .iter()
             .any(|w| w["kind"] == "toll" && w["at_m"].is_number())
     );
+
+    // 후보 비교. 세 프로파일 중 같은 경로는 묶이고 가장 빠른 후보와 최소 요금 후보가 표시된다
+    let (routes_status, routes_body) = send(
+        &app,
+        "POST",
+        "/routes",
+        json!({"from": {"lat": 37.5547, "lon": 126.9707}, "to": {"lat": 35.1151, "lon": 129.0422}}),
+    )
+    .await;
+    assert_eq!(routes_status, StatusCode::OK);
+    let candidates = routes_body["data"]["candidates"].as_array().expect("candidates");
+    assert!((1..=3).contains(&candidates.len()), "{}", candidates.len());
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|c| c["profiles"].as_array().unwrap().len())
+            .sum::<usize>(),
+        3
+    );
+    assert!(candidates.iter().any(|c| c["fastest"] == true));
+    assert!(candidates.iter().any(|c| c["cheapest"] == true));
     // 고속도로 출구 안내에 유도선 색이 붙는다
     let texts: Vec<&str> = body["data"]["instructions"]
         .as_array()

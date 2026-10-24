@@ -15,7 +15,7 @@ pub struct LatLon {
 }
 
 /// `POST /route` 요청 본문. 프로파일은 distance, time, free이며 없으면 distance이다
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize)]
 pub struct RouteRequest {
     pub from: LatLon,
     pub to: LatLon,
@@ -40,4 +40,25 @@ pub struct RouteResponse {
     /// 경로 위 경고. 거리 순서이며 경로 전체 통과제한은 맨 앞, 요금소는 맨 뒤
     pub warnings: Vec<Warning>,
     pub elapsed_ms: f64,
+}
+
+/// `POST /routes`의 후보 하나. 같은 링크 열이 나온 프로파일은 하나로 묶는다
+#[derive(Serialize)]
+pub struct Candidate {
+    /// 이 경로가 나온 프로파일. 둘 이상이면 같은 경로이다
+    pub profiles: Vec<Profile>,
+    /// 후보 가운데 소요시간이 가장 짧음
+    pub fastest: bool,
+    /// 후보 가운데 거리가 가장 짧음
+    pub shortest: bool,
+    /// 후보 가운데 통행료가 가장 적음(미확인 영업소가 없는 후보끼리)
+    pub cheapest: bool,
+    #[serde(flatten)]
+    pub route: RouteResponse,
+}
+
+/// `POST /routes` 응답. 최소시간, 최단거리, 무료도로 세 프로파일의 경로를 통행료와 함께 비교한다
+#[derive(Serialize)]
+pub struct RoutesResponse {
+    pub candidates: Vec<Candidate>,
 }

@@ -13,5 +13,7 @@ use crate::state::AppState;
 
 /// 경로 기능의 라우트 모음
 pub fn router() -> Router<AppState> {
-    Router::new().route("/route", post(handler::create))
+    Router::new()
+        .route("/route", post(handler::create))
+        .route("/routes", post(handler::compare))
 }

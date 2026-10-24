@@ -22,6 +22,14 @@ button:disabled { color: #999; }
 #results li:hover { background: #f0f5ff; }
 #results .addr { display: block; color: #666; font-size: 12px; }
 #status { color: #333; }
+#candidates { list-style: none; margin: 6px 0 0; padding: 0; border: 1px solid #ddd; border-radius: 4px; }
+#candidates li { display: flex; gap: 8px; align-items: center; padding: 6px 8px; cursor: pointer; border-bottom: 1px solid #eee; font-size: 13px; }
+#candidates li:last-child { border-bottom: 0; }
+#candidates li:hover { background: #f0f5ff; }
+#candidates li.selected { background: #e3edff; font-weight: 600; }
+#candidates .name { min-width: 72px; }
+#candidates .tag { font-size: 11px; padding: 1px 5px; border-radius: 3px; background: #eee; color: #333; }
+#candidates .tag.best { background: #2a7de1; color: #fff; }
 #summary { margin-top: 6px; font-weight: 600; }
 #instructions { margin: 6px 0 0; padding-left: 20px; }
 #instructions li { margin: 2px 0; }
