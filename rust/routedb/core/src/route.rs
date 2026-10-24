@@ -701,6 +701,143 @@ impl RouteDb {
     }
 }
 
+/// 대안경로를 찾을 때 이미 찾은 경로의 링크에 곱하는 배율
+pub const ALTERNATIVE_PENALTY: f64 = 1.5;
+/// 대안이 이미 찾은 경로들과 겹치는 길이의 비율 상한. 이보다 많이 겹치면 다른 경로로 보지 않는다
+pub const ALTERNATIVE_MAX_SHARE: f64 = 0.8;
+/// 대안의 비용(최소시간·무료도로는 시간, 최단거리는 거리) 상한. 기본 경로의 배수
+pub const ALTERNATIVE_MAX_STRETCH: f64 = 1.3;
+/// 대안 하나를 찾기 위해 customize를 다시 하는 최대 횟수
+const ALTERNATIVE_MAX_TRIES: usize = 4;
+
+impl RouteDb {
+    /// penalized 간선을 지나는 통행에 `ALTERNATIVE_PENALTY`를 곱한 가중치로 customize한 metric.
+    /// 최소시간·무료도로는 링크 시간 배율에 곱하고 최단거리는 통행 거리 가중치에 곱한다
+    fn penalized_metric(&self, profile: Profile, penalized: &[bool]) -> Metric {
+        let file = &self.file;
+        let customizer = self.structure.customizer();
+        if profile == Profile::Distance {
+            let mut weights = profile::distance_weights(file.turn_weight());
+            let turn_head = file.turn_head();
+            for (t, w) in weights.iter_mut().enumerate() {
+                let hit = penalized[turn_head[t] as usize]
+                    || file.via_of(t).iter().any(|&e| penalized[e as usize]);
+                if hit {
+                    *w =
+                        ((*w as f64 * ALTERNATIVE_PENALTY).round() as u32).min(cch::INF_WEIGHT - 1);
+                }
+            }
+            return customizer.customize(&weights);
+        }
+        let factors: Vec<f32> = {
+            let guard = self.factors.read().expect("factors 잠금 실패");
+            guard
+                .0
+                .iter()
+                .zip(guard.1.iter())
+                .enumerate()
+                .map(|(e, (s, i))| {
+                    let f = s * i;
+                    if penalized[e] {
+                        f * ALTERNATIVE_PENALTY as f32
+                    } else {
+                        f
+                    }
+                })
+                .collect()
+        };
+        let input = ProfileInput {
+            turn_first_out: file.turn_first_out(),
+            turn_head: file.turn_head(),
+            turn_weight: file.turn_weight(),
+            via_first: file.via_first(),
+            via: file.via(),
+            length: file.length(),
+            max_spd: file.max_spd(),
+            toll_first: file.toll_first(),
+            toll_unit: file.toll_unit(),
+            road_rank: file.road_rank(),
+            factor: Some(&factors),
+        };
+        if profile == Profile::Free {
+            customizer.customize(&input.free_weights())
+        } else {
+            customizer.customize(&input.time_weights())
+        }
+    }
+
+    /// 경로의 비용. 최단거리는 거리(m), 나머지는 시간(초)
+    fn route_cost(route: &Route) -> f64 {
+        if route.profile == Profile::Distance {
+            route.distance_m
+        } else {
+            route.duration_s
+        }
+    }
+
+    /// 경로가 penalized 간선과 겹치는 길이(m)
+    fn shared_length(&self, route: &Route, penalized: &[bool]) -> f64 {
+        let length = self.file.length();
+        route
+            .links
+            .iter()
+            .filter_map(|&link| self.edge_of_link(link))
+            .filter(|&e| penalized[e as usize])
+            .map(|e| length[e as usize])
+            .sum()
+    }
+
+    /// 기본 경로 base의 대안경로를 count개까지 찾는다. 이미 찾은 경로의 링크에 배율을 곱한 가중치로 다시 customize하여
+    /// 같은 출발·도착을 탐색하고, 기존 경로들과 `ALTERNATIVE_MAX_SHARE` 넘게 겹치거나 비용이 `ALTERNATIVE_MAX_STRETCH`를 넘으면
+    /// 그 경로도 배율에 넣고 다시 시도하며, 같은 경로가 다시 나오거나 시도 횟수를 다 쓰면 끝낸다
+    pub fn alternatives(
+        &self,
+        base: &Route,
+        from: (f64, f64),
+        from_heading: Option<f64>,
+        to: (f64, f64),
+        count: usize,
+    ) -> Vec<Route> {
+        let mut penalized = vec![false; self.file.edge_count()];
+        let mark = |route: &Route, penalized: &mut Vec<bool>| {
+            for &link in &route.links {
+                if let Some(e) = self.edge_of_link(link) {
+                    penalized[e as usize] = true;
+                }
+            }
+        };
+        mark(base, &mut penalized);
+        let base_cost = Self::route_cost(base);
+        let cch_view = self.cch_view();
+        let mut found: Vec<Route> = Vec::new();
+        let mut tries = 0;
+        while found.len() < count && tries < ALTERNATIVE_MAX_TRIES {
+            tries += 1;
+            let metric = Arc::new(MetricSource::Memory(
+                self.penalized_metric(base.profile, &penalized),
+            ));
+            let metrics = Metrics {
+                sources: [Arc::clone(&metric), Arc::clone(&metric), metric],
+            };
+            let mut router = self.router(&cch_view, &metrics);
+            let Some(route) = router.route_with_heading(from, from_heading, to, base.profile)
+            else {
+                break;
+            };
+            if route.links == base.links || found.iter().any(|r| r.links == route.links) {
+                break;
+            }
+            let share = self.shared_length(&route, &penalized) / route.distance_m.max(1.0);
+            let stretch = Self::route_cost(&route) / base_cost.max(1e-9);
+            mark(&route, &mut penalized);
+            if share <= ALTERNATIVE_MAX_SHARE && stretch <= ALTERNATIVE_MAX_STRETCH {
+                found.push(route);
+            }
+        }
+        found
+    }
+}
+
 /// 출발 방위각과 간선 방위각의 차이가 이 각도를 넘는 출발 후보는 뺀다. 반대 방향 간선은 180도 차이이다
 pub const HEADING_TOLERANCE_DEG: f64 = 90.0;
 

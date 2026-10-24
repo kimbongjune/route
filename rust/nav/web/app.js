@@ -4,7 +4,7 @@
 const TILE_URL = `${location.origin}/tiles/base/{z}/{x}/{y}`;
 const SEOUL_STATION = [126.9707, 37.5547];
 // 자체 지도 스타일. 소스와 레이어를 style-day.json에서 읽고 {origin}을 이 서버 주소로 바꾼다. 화면 버전과 같이 올린다
-const STYLE_VERSION = "13";
+const STYLE_VERSION = "14";
 const EMAP_STYLE = JSON.parse(
   (await (await fetch(`style-day.json?v=${STYLE_VERSION}`)).text()).replaceAll("{origin}", location.origin),
 );
@@ -237,7 +237,7 @@ function selectCandidate(index, fit) {
   prepareTracking(route);
   showRouteInfo(route);
   candidatesList.querySelectorAll("li").forEach((li, i) => li.classList.toggle("selected", i === index));
-  setStatus(`${route.profiles.map(profileName).join("·")} 경로`);
+  setStatus(route.profiles.length ? `${route.profiles.map(profileName).join("·")} 경로` : `대안 ${route.alternative} 경로`);
 }
 
 // 후보 비교 목록. 시간, 거리, 통행료와 가장 빠름·짧음·저렴 표시
@@ -251,7 +251,7 @@ function showCandidates(selected) {
     if (c.cheapest) tags.push("최소 요금");
     const toll = c.toll.unknown.length ? `통행료 ${c.toll.won.toLocaleString()}원+미확인` : c.toll.won > 0 ? `통행료 ${c.toll.won.toLocaleString()}원` : "무료";
     li.innerHTML = `<span class="name"></span><span>${Math.round(c.duration_s / 60)}분</span><span>${(c.distance_m / 1000).toFixed(1)}km</span><span>${toll}</span>`;
-    li.querySelector(".name").textContent = c.profiles.map(profileName).join("·");
+    li.querySelector(".name").textContent = c.profiles.length ? c.profiles.map(profileName).join("·") : `대안 ${c.alternative}`;
     for (const tag of tags) {
       const span = document.createElement("span");
       span.className = "tag best";
@@ -438,7 +438,7 @@ async function reroute(lat, lon) {
   speak("경로를 이탈하여 재탐색합니다");
   setStatus("경로 이탈, 재탐색 중");
   try {
-    const result = await fetchRoute({ lat, lon, heading }, points.to, route.profiles[0]);
+    const result = await fetchRoute({ lat, lon, heading }, points.to, route.profiles[0] ?? route.profile);
     if (result.code !== "OK") {
       setStatus(`재탐색 실패: ${result.message}`);
       return;

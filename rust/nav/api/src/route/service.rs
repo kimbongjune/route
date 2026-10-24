@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use routedb_core::route::{Profile, RouteDb};
+use routedb_core::route::{Profile, Route, RouteDb};
 
 use super::guidance;
 use super::model::{Candidate, LatLon, RouteRequest, RouteResponse, RoutesResponse};
@@ -34,30 +34,73 @@ pub async fn find_route(
             (input.to.lat, input.to.lon),
             input.profile,
         );
-        let route = route.map(|route| {
-            let accident_sections = accidents.sections(&route.geometry, route.distance_m);
-            let toll = tolls.fee(&route.tolls, 0);
-            let instructions = guidance::instructions(&route, &guide_lines);
-            let warnings = guidance::warnings(&route, &accident_sections, &toll);
-            (route, accident_sections, toll, instructions, warnings)
-        });
-        (route, started.elapsed().as_secs_f64() * 1000.0)
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        (
+            route.map(|route| decorate(route, &accidents, &guide_lines, &tolls, elapsed_ms)),
+            elapsed_ms,
+        )
     })
     .await
     .expect("탐색 작업이 중단됨");
-    let (route, accident_sections, toll, instructions, warnings) =
-        route.ok_or(AppError::RouteNotFound)?;
-    Ok(RouteResponse {
+    let _ = elapsed_ms;
+    route.ok_or(AppError::RouteNotFound)
+}
+
+/// 경로에 사고다발 구간, 통행료, 안내문, 경고를 더해 응답으로 만든다
+fn decorate(
+    route: Route,
+    accidents: &AccidentIndex,
+    guide_lines: &GuideLineTable,
+    tolls: &TollTable,
+    elapsed_ms: f64,
+) -> RouteResponse {
+    let accident_sections = accidents.sections(&route.geometry, route.distance_m);
+    let toll = tolls.fee(&route.tolls, 0);
+    let instructions = guidance::instructions(&route, &guide_lines);
+    let warnings = guidance::warnings(&route, &accident_sections, &toll);
+    RouteResponse {
         route,
         accident_sections,
         toll,
         instructions,
         warnings,
         elapsed_ms,
-    })
+    }
 }
 
-/// 세 프로파일의 경로를 모두 구해 같은 링크 열은 하나로 묶고, 가장 빠른·짧은·싼 후보를 표시한다.
+/// 최소시간 경로의 대안경로를 블로킹 스레드에서 찾아 응답으로 만든다
+async fn find_alternatives(
+    db: Arc<RouteDb>,
+    accidents: Arc<AccidentIndex>,
+    guide_lines: Arc<GuideLineTable>,
+    tolls: Arc<TollTable>,
+    base: Route,
+    input: RouteRequest,
+    count: usize,
+) -> Vec<RouteResponse> {
+    tokio::task::spawn_blocking(move || {
+        let started = Instant::now();
+        let routes = db.alternatives(
+            &base,
+            (input.from.lat, input.from.lon),
+            input.from.heading,
+            (input.to.lat, input.to.lon),
+            count,
+        );
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        routes
+            .into_iter()
+            .map(|r| decorate(r, &accidents, &guide_lines, &tolls, elapsed_ms))
+            .collect()
+    })
+    .await
+    .expect("대안 탐색 작업이 중단됨")
+}
+
+/// 대안경로 수
+const ALTERNATIVE_COUNT: usize = 2;
+
+/// 세 프로파일의 경로와 최소시간 경로의 대안 2개까지를 구해 같은 링크 열은 하나로 묶고, 가장 빠른·짧은·싼 후보를 표시한다.
 /// 경로를 하나도 찾지 못하면 RouteNotFound이다. 요청의 profile은 쓰지 않는다
 pub async fn find_routes(
     db: Arc<RouteDb>,
@@ -89,6 +132,7 @@ pub async fn find_routes(
             Some(same) => same.profiles.push(profile),
             None => candidates.push(Candidate {
                 profiles: vec![profile],
+                alternative: 0,
                 fastest: false,
                 shortest: false,
                 cheapest: false,
@@ -98,6 +142,41 @@ pub async fn find_routes(
     }
     if candidates.is_empty() {
         return Err(AppError::RouteNotFound);
+    }
+    // 최소시간 경로의 대안. 프로파일 경로와 같은 링크 열이면 넣지 않는다
+    if let Some(base) = candidates
+        .iter()
+        .find(|c| c.profiles.contains(&Profile::Time))
+        .map(|c| c.route.route.clone())
+    {
+        let alternatives = find_alternatives(
+            Arc::clone(&db),
+            Arc::clone(&accidents),
+            Arc::clone(&guide_lines),
+            Arc::clone(&tolls),
+            base,
+            input,
+            ALTERNATIVE_COUNT,
+        )
+        .await;
+        let mut n = 0;
+        for route in alternatives {
+            if candidates
+                .iter()
+                .any(|c| c.route.route.links == route.route.links)
+            {
+                continue;
+            }
+            n += 1;
+            candidates.push(Candidate {
+                profiles: Vec::new(),
+                alternative: n,
+                fastest: false,
+                shortest: false,
+                cheapest: false,
+                route,
+            });
+        }
     }
     let fastest = candidates
         .iter()

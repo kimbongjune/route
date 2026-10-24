@@ -45,8 +45,10 @@ pub struct RouteResponse {
 /// `POST /routes`의 후보 하나. 같은 링크 열이 나온 프로파일은 하나로 묶는다
 #[derive(Serialize)]
 pub struct Candidate {
-    /// 이 경로가 나온 프로파일. 둘 이상이면 같은 경로이다
+    /// 이 경로가 나온 프로파일. 둘 이상이면 같은 경로이고 대안경로는 비어 있다
     pub profiles: Vec<Profile>,
+    /// 대안경로 번호. 프로파일 경로는 0이고 최소시간 경로의 대안은 1부터이다
+    pub alternative: u8,
     /// 후보 가운데 소요시간이 가장 짧음
     pub fastest: bool,
     /// 후보 가운데 거리가 가장 짧음
@@ -57,7 +59,7 @@ pub struct Candidate {
     pub route: RouteResponse,
 }
 
-/// `POST /routes` 응답. 최소시간, 최단거리, 무료도로 세 프로파일의 경로를 통행료와 함께 비교한다
+/// `POST /routes` 응답. 최소시간, 최단거리, 무료도로 세 프로파일의 경로와 최소시간 경로의 대안을 통행료와 함께 비교한다
 #[derive(Serialize)]
 pub struct RoutesResponse {
     pub candidates: Vec<Candidate>,

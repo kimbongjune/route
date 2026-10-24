@@ -214,7 +214,7 @@ async fn route_requests() {
             .any(|w| w["kind"] == "toll" && w["at_m"].is_number())
     );
 
-    // 후보 비교. 세 프로파일 중 같은 경로는 묶이고 가장 빠른 후보와 최소 요금 후보가 표시된다
+    // 후보 비교. 세 프로파일 중 같은 경로는 묶이고 대안이 더해지며 가장 빠른 후보와 최소 요금 후보가 표시된다
     let (routes_status, routes_body) = send(
         &app,
         "POST",
@@ -223,8 +223,11 @@ async fn route_requests() {
     )
     .await;
     assert_eq!(routes_status, StatusCode::OK);
-    let candidates = routes_body["data"]["candidates"].as_array().expect("candidates");
-    assert!((1..=3).contains(&candidates.len()), "{}", candidates.len());
+    let candidates = routes_body["data"]["candidates"]
+        .as_array()
+        .expect("candidates");
+    // 프로파일 경로 최대 3개에 최소시간 경로의 대안 최대 2개
+    assert!((1..=5).contains(&candidates.len()), "{}", candidates.len());
     assert_eq!(
         candidates
             .iter()
