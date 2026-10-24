@@ -1,0 +1,73 @@
+{
+  "version": 8,
+  "name": "emap-day",
+  "glyphs": "{origin}/fonts/{fontstack}/{range}.pbf",
+  "sources": {
+    "emap-sig": { "type": "vector", "tiles": ["{origin}/vtiles/sig/{z}/{x}/{y}"], "minzoom": 6, "maxzoom": 12, "attribution": "행정안전부 도로명주소 전자지도" },
+    "emap-emd": { "type": "vector", "tiles": ["{origin}/vtiles/emd/{z}/{x}/{y}"], "minzoom": 10, "maxzoom": 14 },
+    "emap-rw": { "type": "vector", "tiles": ["{origin}/vtiles/rw/{z}/{x}/{y}"], "minzoom": 13, "maxzoom": 18 },
+    "emap-road-major": { "type": "vector", "tiles": ["{origin}/vtiles/road_major/{z}/{x}/{y}"], "minzoom": 7, "maxzoom": 12 },
+    "emap-road": { "type": "vector", "tiles": ["{origin}/vtiles/road/{z}/{x}/{y}"], "minzoom": 10, "maxzoom": 18 },
+    "emap-buld": { "type": "vector", "tiles": ["{origin}/vtiles/buld/{z}/{x}/{y}"], "minzoom": 14, "maxzoom": 18 }
+  },
+  "layers": [
+    { "id": "background", "type": "background", "paint": { "background-color": "#f2efe9" } },
+
+    { "id": "sig-fill", "type": "fill", "source": "emap-sig", "source-layer": "v_sig", "maxzoom": 10,
+      "paint": { "fill-color": "#f2efe9", "fill-outline-color": "#cfc9bb" } },
+    { "id": "emd-fill", "type": "fill", "source": "emap-emd", "source-layer": "v_emd", "minzoom": 10, "maxzoom": 15,
+      "paint": { "fill-color": "#f2efe9", "fill-outline-color": "#ddd7ca" } },
+    { "id": "sig-line", "type": "line", "source": "emap-sig", "source-layer": "v_sig", "minzoom": 6, "maxzoom": 13,
+      "paint": { "line-color": "#b3ab9a", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.5, 12, 1.5], "line-dasharray": [3, 2] } },
+
+    { "id": "rw-fill", "type": "fill", "source": "emap-rw", "source-layer": "v_rw", "minzoom": 13,
+      "paint": { "fill-color": "#ffffff" } },
+
+    { "id": "road-major-casing", "type": "line", "source": "emap-road-major", "source-layer": "v_road_major", "minzoom": 7, "maxzoom": 12,
+      "layout": { "line-cap": "round", "line-join": "round" },
+      "paint": { "line-color": ["match", ["get", "cls"], "1", "#c7813a", "#cdb160"],
+                 "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 7, 1.2, 12, 4.5] } },
+    { "id": "road-major-fill", "type": "line", "source": "emap-road-major", "source-layer": "v_road_major", "minzoom": 7, "maxzoom": 12,
+      "layout": { "line-cap": "round", "line-join": "round" },
+      "paint": { "line-color": ["match", ["get", "cls"], "1", "#f7a35c", "#fbe18a"],
+                 "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 7, 0.6, 12, 3] } },
+
+    { "id": "road-casing", "type": "line", "source": "emap-road", "source-layer": "v_road", "minzoom": 12,
+      "layout": { "line-cap": "round", "line-join": "round" },
+      "paint": { "line-color": ["match", ["get", "cls"], "1", "#c7813a", "2", "#cdb160", "3", "#c3bcab", "#d6d0c3"],
+                 "line-width": ["interpolate", ["exponential", 1.5], ["zoom"],
+                   12, ["match", ["get", "cls"], "1", 4, "2", 3, "3", 1.5, 0.8],
+                   16, ["match", ["get", "cls"], "1", 14, "2", 11, "3", 7, 4],
+                   19, ["match", ["get", "cls"], "1", 40, "2", 32, "3", 20, 12]] } },
+    { "id": "road-fill", "type": "line", "source": "emap-road", "source-layer": "v_road", "minzoom": 12,
+      "layout": { "line-cap": "round", "line-join": "round" },
+      "paint": { "line-color": ["match", ["get", "cls"], "1", "#f7a35c", "2", "#fbe18a", "#ffffff"],
+                 "line-width": ["interpolate", ["exponential", 1.5], ["zoom"],
+                   12, ["match", ["get", "cls"], "1", 2.5, "2", 2, "3", 0.8, 0.4],
+                   16, ["match", ["get", "cls"], "1", 10, "2", 8, "3", 5, 2.5],
+                   19, ["match", ["get", "cls"], "1", 32, "2", 26, "3", 16, 9]] } },
+
+    { "id": "buld-fill", "type": "fill", "source": "emap-buld", "source-layer": "v_buld", "minzoom": 14,
+      "paint": { "fill-color": ["interpolate", ["linear"], ["coalesce", ["get", "floors"], 1], 1, "#e9e4da", 5, "#ddd6ca", 15, "#cfc7b8", 40, "#bfb6a5"],
+                 "fill-outline-color": "#c4bcae", "fill-opacity": ["interpolate", ["linear"], ["zoom"], 14, 0.6, 16, 1] } },
+
+    { "id": "road-label", "type": "symbol", "source": "emap-road", "source-layer": "v_road", "minzoom": 13,
+      "filter": ["any", ["all", [">=", ["zoom"], 15]], ["in", ["get", "cls"], ["literal", ["1", "2", "3"]]]],
+      "layout": { "symbol-placement": "line", "text-field": ["get", "name"], "text-font": ["Open Sans Regular"],
+                  "text-size": ["interpolate", ["linear"], ["zoom"], 13, 10, 16, 12, 19, 14], "text-max-angle": 30, "symbol-spacing": 300 },
+      "paint": { "text-color": "#4a4a4a", "text-halo-color": "#ffffff", "text-halo-width": 1.5 } },
+    { "id": "road-major-label", "type": "symbol", "source": "emap-road-major", "source-layer": "v_road_major", "minzoom": 10, "maxzoom": 13,
+      "layout": { "symbol-placement": "line", "text-field": ["get", "name"], "text-font": ["Open Sans Regular"], "text-size": 11, "symbol-spacing": 400 },
+      "paint": { "text-color": "#5a4a2e", "text-halo-color": "#ffffff", "text-halo-width": 1.5 } },
+    { "id": "buld-label", "type": "symbol", "source": "emap-buld", "source-layer": "v_buld", "minzoom": 16,
+      "filter": ["has", "name"],
+      "layout": { "text-field": ["get", "name"], "text-font": ["Open Sans Regular"], "text-size": 11, "text-max-width": 8 },
+      "paint": { "text-color": "#6b6355", "text-halo-color": "#ffffff", "text-halo-width": 1 } },
+    { "id": "emd-label", "type": "symbol", "source": "emap-emd", "source-layer": "v_emd", "minzoom": 11, "maxzoom": 15,
+      "layout": { "text-field": ["get", "name"], "text-font": ["Open Sans Regular"], "text-size": 12 },
+      "paint": { "text-color": "#6b6b6b", "text-halo-color": "#f2efe9", "text-halo-width": 1.5 } },
+    { "id": "sig-label", "type": "symbol", "source": "emap-sig", "source-layer": "v_sig", "minzoom": 7, "maxzoom": 11,
+      "layout": { "text-field": ["get", "name"], "text-font": ["Open Sans Regular"], "text-size": ["interpolate", ["linear"], ["zoom"], 7, 11, 10, 14] },
+      "paint": { "text-color": "#444444", "text-halo-color": "#f2efe9", "text-halo-width": 1.5 } }
+  ]
+}

@@ -1,37 +1,19 @@
 // 지도, 출발·도착 입력, 지오코딩 검색, 경로 요청과 경로선 표시.
-// 배경은 nav-api가 프록시하는 브이월드 2D 타일이고 "자체 지도"를 켜면 GeoServer 벡터 타일(전자지도)로 바꾼다
+// 배경은 nav-api가 프록시하는 브이월드 2D 타일이고 "자체 지도"를 켜면 style-day.json의 전자지도 벡터 타일 스타일로 바꾼다
 
 const TILE_URL = `${location.origin}/tiles/base/{z}/{x}/{y}`;
 const SEOUL_STATION = [126.9707, 37.5547];
-// 자체 벡터 타일. 레이어마다 소스 하나이며 source-layer는 GeoServer 레이어 이름이다
-const VECTOR_LAYERS = [
-  { id: "sig", minzoom: 6, maxzoom: 12, type: "fill", paint: { "fill-color": "#eef0e8", "fill-outline-color": "#c8ccbf" } },
-  { id: "emd", minzoom: 10, maxzoom: 14, type: "fill", paint: { "fill-color": "#f3f4ee", "fill-outline-color": "#d4d8cc" } },
-  { id: "rw", minzoom: 13, maxzoom: 18, type: "fill", paint: { "fill-color": "#ffffff" } },
-  {
-    id: "road", minzoom: 10, maxzoom: 18, type: "line",
-    paint: { "line-color": "#c9c3b3", "line-width": ["interpolate", ["linear"], ["zoom"], 10, 0.5, 14, 1.5, 18, 6] },
-  },
-  { id: "buld", minzoom: 14, maxzoom: 18, type: "fill", paint: { "fill-color": "#d9d5cb", "fill-outline-color": "#b8b2a4" } },
-];
-function vectorSources() {
-  const sources = {};
-  for (const layer of VECTOR_LAYERS) {
-    sources[`emap-${layer.id}`] = {
-      type: "vector",
-      tiles: [`${location.origin}/vtiles/${layer.id}/{z}/{x}/{y}`],
-      minzoom: layer.minzoom,
-      maxzoom: layer.maxzoom,
-      attribution: "행정안전부 도로명주소 전자지도",
-    };
-  }
-  return sources;
-}
+// 자체 지도 스타일. 소스와 레이어를 style-day.json에서 읽고 {origin}을 이 서버 주소로 바꾼다. 화면 버전과 같이 올린다
+const STYLE_VERSION = "8";
+const EMAP_STYLE = JSON.parse(
+  (await (await fetch(`style-day.json?v=${STYLE_VERSION}`)).text()).replaceAll("{origin}", location.origin),
+);
 
 const map = new maplibregl.Map({
   container: "map",
   style: {
     version: 8,
+    glyphs: EMAP_STYLE.glyphs,
     sources: {
       vworld: {
         type: "raster",
@@ -41,23 +23,15 @@ const map = new maplibregl.Map({
         maxzoom: 19,
         attribution: "국토교통부 브이월드",
       },
-      ...vectorSources(),
+      ...EMAP_STYLE.sources,
     },
+    // 브이월드 래스터와 자체 지도 레이어를 모두 넣고 체크박스로 보이는 쪽을 바꾼다. 기본은 브이월드이다
     layers: [
-      { id: "background", type: "background", paint: { "background-color": "#f7f7f2" }, layout: { visibility: "none" } },
       { id: "vworld", type: "raster", source: "vworld" },
-      ...VECTOR_LAYERS.map((layer) => ({
-        id: `emap-${layer.id}`,
-        type: layer.type,
-        source: `emap-${layer.id}`,
-        "source-layer": `v_${layer.id}`,
-        minzoom: layer.minzoom,
-        maxzoom: layer.id === "sig" || layer.id === "emd" ? layer.maxzoom + 1 : 24,
-        paint: layer.paint,
-        layout: { visibility: "none" },
-      })),
+      ...EMAP_STYLE.layers.map((layer) => ({ ...layer, layout: { ...(layer.layout ?? {}), visibility: "none" } })),
     ],
   },
+  localIdeographFontFamily: "'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif",
   center: SEOUL_STATION,
   zoom: 14,
   maxZoom: 19,
@@ -66,13 +40,12 @@ const map = new maplibregl.Map({
 });
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
 
-// "자체 지도": 브이월드 래스터를 숨기고 전자지도 벡터 타일 레이어를 보인다
+// "자체 지도": 브이월드 래스터를 숨기고 전자지도 스타일 레이어를 보인다
 document.getElementById("own-tiles").addEventListener("change", (event) => {
   const own = event.target.checked;
   map.setLayoutProperty("vworld", "visibility", own ? "none" : "visible");
-  map.setLayoutProperty("background", "visibility", own ? "visible" : "none");
-  for (const layer of VECTOR_LAYERS) {
-    map.setLayoutProperty(`emap-${layer.id}`, "visibility", own ? "visible" : "none");
+  for (const layer of EMAP_STYLE.layers) {
+    map.setLayoutProperty(layer.id, "visibility", own ? "visible" : "none");
   }
 });
 

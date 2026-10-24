@@ -18,6 +18,7 @@ fn vector_layer_of(name: &str) -> Option<&'static str> {
     match name {
         "buld" => Some("v_buld"),
         "road" => Some("v_road"),
+        "road_major" => Some("v_road_major"),
         "rw" => Some("v_rw"),
         "sig" => Some("v_sig"),
         "emd" => Some("v_emd"),
@@ -32,7 +33,7 @@ pub async fn vector_tile(
 ) -> Result<Response, AppError> {
     let Some(gs_layer) = vector_layer_of(&layer) else {
         return Err(AppError::BadRequest(format!(
-            "벡터 타일 레이어 {layer}는 없음. buld, road, rw, sig, emd 중 하나"
+            "벡터 타일 레이어 {layer}는 없음. buld, road, road_major, rw, sig, emd 중 하나"
         )));
     };
     let url = format!(
