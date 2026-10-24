@@ -47,9 +47,14 @@
                    16, ["match", ["get", "cls"], "1", 10, "2", 8, "3", 5, 2.5],
                    19, ["match", ["get", "cls"], "1", 32, "2", 26, "3", 16, 9]] } },
 
-    { "id": "buld-fill", "type": "fill", "source": "emap-buld", "source-layer": "v_buld", "minzoom": 14,
+    { "id": "buld-fill", "type": "fill", "source": "emap-buld", "source-layer": "v_buld", "minzoom": 14, "maxzoom": 15,
       "paint": { "fill-color": ["interpolate", ["linear"], ["coalesce", ["get", "floors"], 1], 1, "#e9e4da", 5, "#ddd6ca", 15, "#cfc7b8", 40, "#bfb6a5"],
-                 "fill-outline-color": "#c4bcae", "fill-opacity": ["interpolate", ["linear"], ["zoom"], 14, 0.6, 16, 1] } },
+                 "fill-outline-color": "#c4bcae", "fill-opacity": ["interpolate", ["linear"], ["zoom"], 14, 0.6, 15, 1] } },
+    { "id": "buld-3d", "type": "fill-extrusion", "source": "emap-buld", "source-layer": "v_buld", "minzoom": 15,
+      "paint": { "fill-extrusion-color": ["interpolate", ["linear"], ["coalesce", ["get", "floors"], 1], 1, "#e9e4da", 5, "#ddd6ca", 15, "#cfc7b8", 40, "#bfb6a5"],
+                 "fill-extrusion-height": ["*", ["max", ["coalesce", ["get", "floors"], 1], 1], 3],
+                 "fill-extrusion-base": 0,
+                 "fill-extrusion-opacity": 0.9 } },
 
     { "id": "road-label", "type": "symbol", "source": "emap-road", "source-layer": "v_road", "minzoom": 13,
       "filter": ["any", ["all", [">=", ["zoom"], 15]], ["in", ["get", "cls"], ["literal", ["1", "2", "3"]]]],

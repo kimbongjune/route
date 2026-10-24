@@ -4,7 +4,7 @@
 const TILE_URL = `${location.origin}/tiles/base/{z}/{x}/{y}`;
 const SEOUL_STATION = [126.9707, 37.5547];
 // 자체 지도 스타일. 소스와 레이어를 style-day.json에서 읽고 {origin}을 이 서버 주소로 바꾼다. 화면 버전과 같이 올린다
-const STYLE_VERSION = "8";
+const STYLE_VERSION = "10";
 const EMAP_STYLE = JSON.parse(
   (await (await fetch(`style-day.json?v=${STYLE_VERSION}`)).text()).replaceAll("{origin}", location.origin),
 );
@@ -466,11 +466,10 @@ function showPosition(lat, lon) {
 // 안내 시점(m). 안내 지점 앞 이 거리들에서 한 번씩 말하며 마지막은 "잠시 후"이다. 고속도로 출구는 더 멀리서 시작한다
 const CITY_STAGES = [300, 50];
 const EXIT_STAGES = [1000, 500, 50];
-// 경고 알림 거리. 과속카메라는 티맵 일반도로 기본값과 같은 600m, 나머지는 300m
-const CAMERA_AHEAD_M = 600;
+// 경고 알림 거리. 과속카메라는 티맵 일반도로 기본값과 같은 600m에서 한 번, 150m에서 "잠시 후"로 한 번 더 말하고 나머지는 300m에서 한 번이다
+const CAMERA_STAGES = [600, 150];
+const CAMERA_AHEAD_M = CAMERA_STAGES[0];
 const WARNING_AHEAD_M = 300;
-// 회전 안내가 이 거리 안에 있으면 경고 음성은 생략하고 화면으로만 알린다
-const TURN_PRIORITY_M = 300;
 // 이 거리 안에 이어지는 과속방지턱은 한 구간으로 묶어 한 번만 알린다
 const BUMP_GROUP_M = 100;
 // 과속카메라 앞에서 현재 속도가 제한속도를 넘으면 경고음을 낸다
@@ -515,15 +514,16 @@ function isIntersectionName(name) {
   return !(/^[0-9-]+$/.test(tail) && /[0-9]/.test(tail));
 }
 
-// 경고의 음성 문장. 사고다발 구간은 화면으로만 알린다
-function warningSpeech(w, ahead) {
+// 경고의 음성 문장. 사고다발 구간은 화면으로만 알린다. 카메라의 마지막 단계는 "잠시 후"이다
+function warningSpeech(w, ahead, last = false) {
+  const head = last ? "잠시 후" : `${spokenDistance(ahead)} 앞`;
   if (w.kind === "speed_camera") {
     const limit = w.text.match(/제한속도 (\d+)/);
-    return `${spokenDistance(ahead)} 앞 과속 단속 카메라입니다${limit ? `. 제한 속도 ${limit[1]}` : ""}`;
+    return `${head} 과속 단속 카메라입니다${limit ? `. 제한 속도 ${limit[1]}` : ""}`;
   }
   if (w.kind === "camera") {
     const limit = w.text.match(/제한속도 (\d+)/);
-    return `${spokenDistance(ahead)} 앞 ${w.text.split(",")[0]}입니다${limit ? `. 제한 속도 ${limit[1]}` : ""}`;
+    return `${head} ${w.text.split(",")[0]}입니다${limit ? `. 제한 속도 ${limit[1]}` : ""}`;
   }
   if (w.kind === "speed_bump") return "과속방지턱입니다";
   if (w.kind === "toll") return "전방에 요금소가 있습니다";
@@ -542,25 +542,37 @@ let lastFix = null;
 // 현재 속도(km/h). 위치 간 거리와 시간으로 잰다
 let speedKmh = 0;
 
-// 지금 말하는 문장의 종류. 회전 안내는 경고만 끊고 안내는 뒤에 이어 말한다
+// 지금 말하는 문장의 종류. 회전 안내는 경고만 끊고 안내는 뒤에 이어 말한다.
+// 끊긴 경고는 말한 기록에서 지워 회전 안내가 끝난 뒤 그때 거리로 다시 말한다
 let speakingKind = null;
+let speakingWarningKey = null;
 
-function speak(text, kind = "turn") {
+function speak(text, kind = "turn", key = null) {
   if (!el("voice").checked || !("speechSynthesis" in window)) return;
-  if (speechSynthesis.speaking && speakingKind === "warning") speechSynthesis.cancel();
+  if (speechSynthesis.speaking && speakingKind === "warning") {
+    if (speakingWarningKey) spoken.delete(speakingWarningKey);
+    speakingWarningKey = null;
+    speechSynthesis.cancel();
+  }
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = "ko-KR";
   utterance.rate = 1.05;
-  utterance.onstart = () => (speakingKind = kind);
-  utterance.onend = () => (speakingKind = null);
+  utterance.onstart = () => {
+    speakingKind = kind;
+    speakingWarningKey = key;
+  };
+  utterance.onend = () => {
+    speakingKind = null;
+    if (speakingWarningKey === key) speakingWarningKey = null;
+  };
   speechSynthesis.speak(utterance);
 }
 
-// 경고는 말하는 중이면 미룬다. 말했으면 true
-function speakIfIdle(text) {
+// 경고는 말하는 중이면 미룬다. 말했으면 true. key는 끊겼을 때 다시 말하기 위한 말한 기록의 키이다
+function speakIfIdle(text, key = null) {
   if (!el("voice").checked || !("speechSynthesis" in window)) return true;
   if (speechSynthesis.speaking) return false;
-  speak(text, "warning");
+  speak(text, "warning", key);
   return true;
 }
 
@@ -650,19 +662,23 @@ function onPosition(lat, lon) {
   }
   if (!lastFix || now - lastFix.time >= 1000) lastFix = { time: now, at_m: snapped.at_m };
 
-  // 근접 알림. 카메라는 600m, 나머지는 300m 앞에서 한 번씩. 회전 안내가 가까우면 음성은 생략한다
-  const turnNear = next && next.at_m - snapped.at_m <= TURN_PRIORITY_M;
+  // 근접 알림. 카메라는 600m와 150m, 나머지는 300m 앞에서 한 번씩. 말하는 중이면 미루고 지나치기 전까지 다시 시도한다
   route.warnings.forEach((w, i) => {
     if (w.at_m === undefined || w.at_m === null) return;
     const ahead = w.at_m - snapped.at_m;
-    const limit = w.kind === "speed_camera" || w.kind === "camera" ? CAMERA_AHEAD_M : WARNING_AHEAD_M;
-    if (ahead >= -20 && ahead <= limit && !spoken.has(`w${i}`)) {
+    const isCamera = w.kind === "speed_camera" || w.kind === "camera";
+    const stages = isCamera ? CAMERA_STAGES : [WARNING_AHEAD_M];
+    // 아직 말하지 않은 단계 중 거리 안에 든 것. 여럿이면 가장 가까운 단계로 한 번만 말한다
+    const due = stages.filter((s) => ahead <= s && !spoken.has(`w${i}:${s}`));
+    if (ahead >= -20 && due.length) {
+      const stage = due[due.length - 1];
+      const key = `w${i}:${stage}`;
       // 이어지는 방지턱은 한 구간으로 묶는다
       let grouped = false;
       if (w.kind === "speed_bump") {
         for (let j = i + 1; j < route.warnings.length && route.warnings[j].at_m - w.at_m <= BUMP_GROUP_M; j++) {
           if (route.warnings[j].kind === "speed_bump") {
-            spoken.add(`w${j}`);
+            spoken.add(`w${j}:${WARNING_AHEAD_M}`);
             shown.add(`w${j}`);
             grouped = true;
           }
@@ -673,9 +689,10 @@ function onPosition(lat, lon) {
         const kind = { speed_bump: "bump", accident_zone: "accident", toll: "toll" }[w.kind] ?? "camera";
         showAlert(kind, `${formatDistance(Math.max(0, ahead))} 앞 ${grouped ? "과속방지턱 연속 구간" : alertText(w)}`);
       }
-      // 음성은 회전 안내가 가깝거나 말하는 중이면 미루고, 지나치기 전까지 다시 시도한다
-      const speech = grouped ? "과속방지턱 연속 구간입니다" : warningSpeech(w, Math.max(0, ahead));
-      if (!speech || (!turnNear && speakIfIdle(speech))) spoken.add(`w${i}`);
+      // 음성은 말하는 중이면 미루고 지나치기 전까지 다시 시도한다. 회전 안내가 끊으면 다시 말한다
+      const last = isCamera && stage === CAMERA_STAGES[CAMERA_STAGES.length - 1];
+      const speech = grouped ? "과속방지턱 연속 구간입니다" : warningSpeech(w, Math.max(0, ahead), last);
+      if (!speech || speakIfIdle(speech, key)) due.forEach((s) => spoken.add(`w${i}:${s}`));
     }
     // 과속카메라 앞에서 제한속도를 넘으면 경고음과 함께 한 번 알린다
     if (w.kind === "speed_camera" && ahead >= 0 && ahead <= SPEEDING_AHEAD_M && !spoken.has(`s${i}`)) {

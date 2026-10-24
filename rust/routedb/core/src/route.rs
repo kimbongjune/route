@@ -884,9 +884,10 @@ impl RouteDb {
             ends.push(acc);
         }
         let start_bearing_of = |x: usize| end_bearings(&self.edge_points(x), 15.0).0;
+        // 안내 지점마다 분기 수를 세고, 분기가 하나(들어온 방향 제외)면 고를 길이 없으므로 꺾여도 안내하지 않는다
         let steps = turn_points(&headings)
             .into_iter()
-            .map(|t| {
+            .filter_map(|t| {
                 let branches = count_branches(
                     file.first_out(),
                     file.head(),
@@ -895,7 +896,10 @@ impl RouteDb {
                     headings[t.link].end,
                     start_bearing_of,
                 );
-                Step {
+                if branches <= 1 {
+                    return None;
+                }
+                Some(Step {
                     at_m: ends[t.link],
                     lat: link_ends[t.link].0,
                     lon: link_ends[t.link].1,
@@ -910,7 +914,7 @@ impl RouteDb {
                     sign: sign_color(t.to_rank),
                     branches,
                     clock: (branches >= BRANCHES_FOR_CLOCK).then(|| clock_hour(t.angle)),
-                }
+                })
             })
             .collect();
         let segments = merge_runs(&names, &parts)
