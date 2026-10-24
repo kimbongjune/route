@@ -4,11 +4,13 @@ use serde::{Deserialize, Serialize};
 use super::guidance::{Instruction, Warning};
 use crate::accident::model::AccidentSection;
 
-/// 위경도
+/// 위경도. `heading`은 진행 방위각(진북 0, 시계 방향 0~360도)이며 출발지에서만 사용한다
 #[derive(Clone, Copy, Debug, Deserialize)]
 pub struct LatLon {
     pub lat: f64,
     pub lon: f64,
+    #[serde(default)]
+    pub heading: Option<f64>,
 }
 
 /// `POST /route` 요청 본문. 프로파일은 distance, time, free이며 없으면 distance이다

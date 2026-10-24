@@ -64,9 +64,14 @@ function setPoint(kind, point) {
   routeButton.disabled = !(points.from && points.to);
 }
 
-// 지도 클릭: 출발이 없으면 출발, 있으면 도착
+// 지도 클릭: 출발이 없으면 출발, 있으면 도착. 시뮬레이션 중이면 가짜 위치를 그 지점으로 옮겨 이탈을 확인한다
 map.on("click", (event) => {
   const { lng, lat } = event.lngLat;
+  if (simulationTimer !== null) {
+    simulationJump = { lat, lon: lng };
+    setStatus("시뮬레이션 위치를 옮김");
+    return;
+  }
   const kind = points.from ? "to" : "from";
   setPoint(kind, { lat, lon: lng, name: `${lat.toFixed(5)}, ${lng.toFixed(5)}` });
   hideResults();
@@ -139,8 +144,8 @@ el("from-here").addEventListener("click", () => {
   setStatus("현재 위치 확인 중");
   navigator.geolocation.getCurrentPosition(
     (position) => {
-      const { latitude: lat, longitude: lon } = position.coords;
-      setPoint("from", { lat, lon, name: "현재 위치" });
+      const { latitude: lat, longitude: lon, heading } = position.coords;
+      setPoint("from", { lat, lon, name: "현재 위치", heading });
       map.flyTo({ center: [lon, lat], zoom: 15 });
       setStatus("현재 위치를 출발지로 정함");
       if (points.to) requestRoute();
@@ -155,29 +160,40 @@ el("profile").addEventListener("change", () => {
   if (points.from && points.to) requestRoute();
 });
 
-// 경로 요청과 표시
-async function requestRoute() {
-  if (!(points.from && points.to)) return;
-  setStatus("경로 탐색 중");
+// POST /route. 출발지에 방위각이 있으면 함께 보낸다
+async function fetchRoute(from, to, profile) {
   const body = {
-    from: { lat: points.from.lat, lon: points.from.lon },
-    to: { lat: points.to.lat, lon: points.to.lon },
-    profile: el("profile").value,
+    from: { lat: from.lat, lon: from.lon, ...(Number.isFinite(from.heading) ? { heading: from.heading } : {}) },
+    to: { lat: to.lat, lon: to.lon },
+    profile,
   };
   const response = await fetch("/route", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const result = await response.json();
+  return response.json();
+}
+
+// 경로 요청과 표시
+async function requestRoute() {
+  if (!(points.from && points.to)) return;
+  setStatus("경로 탐색 중");
+  const result = await fetchRoute(points.from, points.to, el("profile").value);
   if (result.code !== "OK") {
     setStatus(`${result.message} (${result.code})`);
     clearRoute();
     return;
   }
   route = result.data;
-  drawRoute(route);
+  drawRoute(route, true);
   prepareTracking(route);
+  showRouteInfo(route);
+  setStatus(`${profileName(route.profile)} 경로`);
+}
+
+// 요약과 안내문 목록
+function showRouteInfo(route) {
   const minutes = Math.round(route.duration_s / 60);
   const km = (route.distance_m / 1000).toFixed(1);
   summary.textContent = `${km}km · ${minutes}분 · 안내 ${route.instructions.length}곳 · 경고 ${route.warnings.length}건 · ${route.elapsed_ms.toFixed(0)}ms`;
@@ -194,7 +210,6 @@ async function requestRoute() {
     instructionsList.appendChild(li);
   }
   instructionsList.hidden = false;
-  setStatus(`${profileName(route.profile)} 경로`);
 }
 
 function formatDistance(m) {
@@ -213,7 +228,8 @@ function routeGeoJson(route) {
   };
 }
 
-function drawRoute(route) {
+// 경로선을 그린다. fit이면 경로 전체가 보이게 화면을 맞춘다
+function drawRoute(route, fit) {
   const data = routeGeoJson(route);
   if (map.getSource("route")) {
     map.getSource("route").setData(data);
@@ -234,6 +250,7 @@ function drawRoute(route) {
       paint: { "line-color": "#2a7de1", "line-width": 5 },
     });
   }
+  if (!fit) return;
   const bounds = data.geometry.coordinates.reduce(
     (b, c) => b.extend(c),
     new maplibregl.LngLatBounds(data.geometry.coordinates[0], data.geometry.coordinates[0]),
@@ -261,8 +278,28 @@ map.on("error", (event) => setStatus(`지도 오류: ${event.error?.message ?? "
 // ---------------------------------------------------------------
 
 const SIMULATION_KMH = 60;
-// 경로에서 이만큼 떨어지면 이탈로 본다. 재요청은 다음 항목에서 한다
+// 경로에서 이만큼 떨어진 위치가 OFF_ROUTE_COUNT회 연속이면 이탈이다. Mapbox 기본값 50m를 따른다
 const OFF_ROUTE_M = 50;
+const OFF_ROUTE_COUNT = 3;
+// 최대 진행 거리보다 이만큼 뒤인 위치가 OFF_ROUTE_COUNT회 연속이면 역방향 이탈이다
+const BACKTRACK_M = 50;
+// 재탐색은 마지막 요청 지점에서 이만큼 움직였을 때만 다시 보낸다
+const REROUTE_MIN_MOVE_M = 50;
+
+// 이탈 판정 상태. 연속 횟수, 최대 진행 거리, 재탐색 중 여부, 마지막 재탐색 지점
+let offCount = 0;
+let backCount = 0;
+let maxAtM = 0;
+let rerouting = false;
+let lastReroute = null;
+// 시뮬레이션 진행 거리와 지도 클릭으로 옮긴 가짜 위치
+let simulationTravelled = 0;
+let simulationJump = null;
+
+function distanceM(a, b) {
+  const m = metersPerDegree(a.lat);
+  return Math.hypot((a.lon - b.lon) * m.lon, (a.lat - b.lat) * m.lat);
+}
 
 // 경로 좌표 열(경도, 위도)과 꼭짓점마다 출발점부터의 거리(m). 좌표 열의 길이를 경로 거리에 맞춰 비례시킨다
 let track = null;
@@ -274,7 +311,8 @@ function metersPerDegree(lat) {
   return { lon: 111320 * Math.cos((lat * Math.PI) / 180), lat: 110950 };
 }
 
-function prepareTracking(route) {
+// 경로 좌표 열과 누적 거리를 만든다
+function buildTrack(route) {
   const coords = route.geometry.map(([lat, lon]) => [lon, lat]);
   const cumulative = [0];
   for (let i = 1; i < coords.length; i++) {
@@ -284,10 +322,54 @@ function prepareTracking(route) {
     cumulative.push(cumulative[i - 1] + Math.hypot(dx, dy));
   }
   const scale = cumulative[cumulative.length - 1] > 0 ? route.distance_m / cumulative[cumulative.length - 1] : 1;
-  track = { coords, cumulative: cumulative.map((c) => c * scale), route };
+  return { coords, cumulative: cumulative.map((c) => c * scale), route };
+}
+
+function prepareTracking(route) {
+  track = buildTrack(route);
   stopTracking();
   el("drive-button").disabled = false;
   el("simulate-button").disabled = false;
+}
+
+// 추적 중에 경로를 새 것으로 바꾼다. 말한 안내와 이탈 상태를 처음으로 되돌리고 시뮬레이션은 새 경로의 처음부터 간다
+function replaceRoute(data) {
+  route = data;
+  track = buildTrack(route);
+  drawRoute(route, false);
+  showRouteInfo(route);
+  spoken = new Set();
+  shown = new Set();
+  lastSnapped = null;
+  lastFix = null;
+  offCount = 0;
+  backCount = 0;
+  maxAtM = 0;
+  simulationTravelled = 0;
+  simulationJump = null;
+}
+
+// 이탈 재탐색. 현재 위치와 진행 방위각을 출발로, 도착지와 프로파일은 그대로 요청한다
+async function reroute(lat, lon) {
+  if (rerouting) return;
+  if (lastReroute && distanceM(lastReroute, { lat, lon }) < REROUTE_MIN_MOVE_M) return;
+  rerouting = true;
+  lastReroute = { lat, lon };
+  speak("경로를 이탈하여 재탐색합니다");
+  setStatus("경로 이탈, 재탐색 중");
+  try {
+    const result = await fetchRoute({ lat, lon, heading }, points.to, el("profile").value);
+    if (result.code !== "OK") {
+      setStatus(`재탐색 실패: ${result.message}`);
+      return;
+    }
+    replaceRoute(result.data);
+    setStatus(`${profileName(route.profile)} 경로 (재탐색)`);
+  } catch (error) {
+    setStatus(`재탐색 실패: ${error.message}`);
+  } finally {
+    rerouting = false;
+  }
 }
 
 // 위치를 경로 위 가장 가까운 점으로 스냅한다. 결과는 경로 위 점, 출발점부터의 거리, 경로에서 떨어진 거리
@@ -346,8 +428,8 @@ function showPosition(lat, lon) {
 }
 
 // 안내 시점(m). 안내 지점 앞 이 거리들에서 한 번씩 말하며 마지막은 "잠시 후"이다. 고속도로 출구는 더 멀리서 시작한다
-const CITY_STAGES = [1000, 300, 50];
-const EXIT_STAGES = [2000, 1000, 500, 50];
+const CITY_STAGES = [300, 50];
+const EXIT_STAGES = [1000, 500, 50];
 // 경고 알림 거리. 과속카메라는 티맵 일반도로 기본값과 같은 600m, 나머지는 300m
 const CAMERA_AHEAD_M = 600;
 const WARNING_AHEAD_M = 300;
@@ -413,7 +495,8 @@ function warningSpeech(w, ahead) {
 }
 // 진행 방향을 위로 두는 카메라의 기울기. 브이월드 래스터 타일은 글자가 같이 돌아가므로 기본은 북쪽이 위이고 체크하면 돈다
 const HEADING_UP_PITCH = 45;
-let heading = 0;
+// 진행 방위각. 5m 넘게 움직이기 전에는 없다
+let heading = null;
 
 // 말한 안내와 경고. 안내는 "번호:단계", 경고는 "w번호", 과속은 "s번호". 화면에 띄운 경고는 shown이다
 let spoken = new Set();
@@ -423,13 +506,17 @@ let lastFix = null;
 // 현재 속도(km/h). 위치 간 거리와 시간으로 잰다
 let speedKmh = 0;
 
-// 회전 안내는 말하던 것을 끊고 바로 말한다
-function speak(text) {
+// 지금 말하는 문장의 종류. 회전 안내는 경고만 끊고 안내는 뒤에 이어 말한다
+let speakingKind = null;
+
+function speak(text, kind = "turn") {
   if (!el("voice").checked || !("speechSynthesis" in window)) return;
-  speechSynthesis.cancel();
+  if (speechSynthesis.speaking && speakingKind === "warning") speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = "ko-KR";
   utterance.rate = 1.05;
+  utterance.onstart = () => (speakingKind = kind);
+  utterance.onend = () => (speakingKind = null);
   speechSynthesis.speak(utterance);
 }
 
@@ -437,7 +524,7 @@ function speak(text) {
 function speakIfIdle(text) {
   if (!el("voice").checked || !("speechSynthesis" in window)) return true;
   if (speechSynthesis.speaking) return false;
-  speak(text);
+  speak(text, "warning");
   return true;
 }
 
@@ -480,6 +567,12 @@ function onPosition(lat, lon) {
   const off = snapped.dist > OFF_ROUTE_M;
   dot.classList.toggle("off", off);
   const { route } = track;
+
+  // 이탈 판정. 경로에서 50m 넘게 떨어진 위치나 최대 진행 거리보다 50m 넘게 뒤인 위치가 3회 연속이면 재탐색한다
+  offCount = off ? offCount + 1 : 0;
+  if (!off) maxAtM = Math.max(maxAtM, snapped.at_m);
+  backCount = !off && snapped.at_m < maxAtM - BACKTRACK_M ? backCount + 1 : 0;
+  if (offCount >= OFF_ROUTE_COUNT || backCount >= OFF_ROUTE_COUNT) reroute(lat, lon);
   const remainingM = Math.max(0, route.distance_m - snapped.at_m);
   const remainingS = (remainingM / route.distance_m) * route.duration_s;
 
@@ -495,14 +588,12 @@ function onPosition(lat, lon) {
     el("banner-dist").textContent = formatDistance(ahead);
     el("banner-text").textContent = next.text;
     const stages = next.turn.startsWith("exit") ? EXIT_STAGES : CITY_STAGES;
-    for (const stage of stages) {
-      const key = `${nextIndex}:${stage}`;
-      if (ahead <= stage && !spoken.has(key)) {
-        // 한 단계를 말하면 그보다 먼 단계는 지난 것으로 처리한다
-        stages.filter((s) => s >= stage).forEach((s) => spoken.add(`${nextIndex}:${s}`));
-        speak(speechFor(route.steps[nextIndex], next, ahead, stage === stages[stages.length - 1]));
-        break;
-      }
+    // 아직 말하지 않은 단계 중 남은 거리 안에 든 것들. 가장 가까운 단계로 한 번만 말하고 나머지는 지난 것으로 처리한다
+    const due = stages.filter((s) => ahead <= s && !spoken.has(`${nextIndex}:${s}`));
+    if (due.length > 0) {
+      due.forEach((s) => spoken.add(`${nextIndex}:${s}`));
+      const stage = due[due.length - 1];
+      speak(speechFor(route.steps[nextIndex], next, ahead, stage === stages[stages.length - 1]));
     }
   } else {
     el("banner-dist").textContent = formatDistance(remainingM);
@@ -570,11 +661,11 @@ function onPosition(lat, lon) {
   lastSnapped = snapped;
   const headingUp = el("heading-up").checked;
   const camera = headingUp
-    ? { bearing: heading, pitch: HEADING_UP_PITCH, padding: { top: Math.round(map.getContainer().clientHeight * 0.4), bottom: 0, left: 0, right: 0 } }
+    ? { bearing: heading ?? 0, pitch: HEADING_UP_PITCH, padding: { top: Math.round(map.getContainer().clientHeight * 0.4), bottom: 0, left: 0, right: 0 } }
     : { bearing: 0, pitch: 0, padding: { top: 0, bottom: 0, left: 0, right: 0 } };
   map.easeTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), 16), duration: 900, ...camera });
   // rotationAlignment가 map이라 마커가 지도와 함께 돌므로 화살표는 진행 방위각만큼만 돌린다
-  dot.style.transform = `rotate(${heading}deg)`;
+  dot.style.transform = `rotate(${heading ?? 0}deg)`;
 }
 
 function startDriving() {
@@ -598,12 +689,17 @@ function startSimulation() {
   if (!track) return;
   stopTracking();
   setStatus(`시뮬레이션 ${SIMULATION_KMH}km/h`);
-  let travelled = 0;
+  simulationTravelled = 0;
   const stepM = (SIMULATION_KMH / 3.6) * 1;
   speak("안내를 시작합니다");
   simulationTimer = setInterval(() => {
-    travelled += stepM;
-    if (travelled >= track.route.distance_m) {
+    // 지도 클릭으로 옮긴 위치가 있으면 거기 멈춰 있는 것으로 하여 이탈 판정과 재탐색을 거친다
+    if (simulationJump) {
+      onPosition(simulationJump.lat, simulationJump.lon);
+      return;
+    }
+    simulationTravelled += stepM;
+    if (simulationTravelled >= track.route.distance_m) {
       const end = pointAt(track.route.distance_m);
       onPosition(end.lat, end.lon);
       stopTracking();
@@ -611,7 +707,7 @@ function startSimulation() {
       speak("목적지에 도착했습니다");
       return;
     }
-    const p = pointAt(travelled);
+    const p = pointAt(simulationTravelled);
     const jitter = metersPerDegree(p.lat);
     onPosition(p.lat + ((Math.random() - 0.5) * 10) / jitter.lat, p.lon + ((Math.random() - 0.5) * 10) / jitter.lon);
   }, 1000);
@@ -624,9 +720,16 @@ function stopTracking() {
   lastSnapped = null;
   lastFix = null;
   speedKmh = 0;
+  heading = null;
+  offCount = 0;
+  backCount = 0;
+  maxAtM = 0;
+  lastReroute = null;
+  simulationJump = null;
   el("banner").hidden = true;
   el("alerts").innerHTML = "";
   if ("speechSynthesis" in window) speechSynthesis.cancel();
+  speakingKind = null;
   if (watchId !== null) {
     navigator.geolocation.clearWatch(watchId);
     watchId = null;

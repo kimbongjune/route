@@ -1,6 +1,6 @@
 // 출발 위경도와 도착 위경도를 받아 RouteDb로 경로를 구하고 거리, 시간, 링크 열, 영업소, 통과제한, 지점을 출력한다.
-// 다섯 번째 인자는 프로파일이며 distance, time, free 중 하나이고 없으면 distance이다.
-// cargo run --release -p importer-knl --example route_cli -- 37.5547 126.9707 37.4979 127.0276 time
+// 다섯 번째 인자는 프로파일이며 distance, time, free 중 하나이고 없으면 distance이다. 여섯 번째 인자는 출발 방위각(도)이다.
+// cargo run --release -p importer-knl --example route_cli -- 37.5547 126.9707 37.4979 127.0276 time 180
 use std::path::Path;
 use std::time::Instant;
 
@@ -22,7 +22,9 @@ fn main() {
         .map(|a| a.parse().expect("위경도는 숫자여야 함"))
         .collect();
     let [from_lat, from_lon, to_lat, to_lon] = coords[..] else {
-        eprintln!("사용법: route_cli 출발위도 출발경도 도착위도 도착경도 [distance|time|free]");
+        eprintln!(
+            "사용법: route_cli 출발위도 출발경도 도착위도 도착경도 [distance|time|free] [출발방위각]"
+        );
         std::process::exit(1);
     };
     let profile = match args.get(4).map(String::as_str) {
@@ -34,6 +36,9 @@ fn main() {
             std::process::exit(1);
         }
     };
+    let heading: Option<f64> = args
+        .get(5)
+        .map(|a| a.parse().expect("방위각은 숫자여야 함"));
 
     let started = Instant::now();
     let db = RouteDb::open(
@@ -55,16 +60,19 @@ fn main() {
     );
 
     let started = Instant::now();
-    let Some(route) = router.route((from_lat, from_lon), (to_lat, to_lon), profile) else {
+    let Some(route) =
+        router.route_with_heading((from_lat, from_lon), heading, (to_lat, to_lon), profile)
+    else {
         println!("경로 없음");
         return;
     };
     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
     let link_id = db.file.link_id();
     println!(
-        "출발 스냅 링크 {} 거리 {:.1}m | 도착 스냅 링크 {} 거리 {:.1}m",
+        "출발 스냅 링크 {} 거리 {:.1}m 방위각 {:.0}° | 도착 스냅 링크 {} 거리 {:.1}m",
         link_id[route.from.edge as usize],
         route.from.distance_m,
+        route.from.bearing_deg,
         link_id[route.to.edge as usize],
         route.to.distance_m
     );

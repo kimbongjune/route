@@ -66,6 +66,8 @@ pub struct Snap {
     pub lon: f64,
     /// 간선 시작점에서 투영한 위치까지의 거리(m)
     pub offset_m: f64,
+    /// 투영한 선분의 진행 방위각(도). 진북이 0이고 시계 방향이다
+    pub bearing_deg: f64,
 }
 
 /// 링크 선분 R-tree
@@ -122,13 +124,15 @@ impl LinkIndex {
             }
             let (q, t) = seg.project(p);
             let (lat, lon) = to_latlon(q);
-            let seg_len = ((seg.b[0] - seg.a[0]).powi(2) + (seg.b[1] - seg.a[1]).powi(2)).sqrt();
+            let (dx, dy) = (seg.b[0] - seg.a[0], seg.b[1] - seg.a[1]);
+            let seg_len = (dx * dx + dy * dy).sqrt();
             snaps.push(Snap {
                 edge: seg.edge,
                 distance_m: seg.distance_2(&p).sqrt(),
                 lat,
                 lon,
                 offset_m: seg.offset_a + t * seg_len,
+                bearing_deg: (dx.atan2(dy).to_degrees() + 360.0) % 360.0,
             });
             if snaps.len() == n {
                 break;
@@ -158,9 +162,12 @@ mod tests {
         assert!((s.lat - 37.000).abs() < 1e-9 && (s.lon - 127.001).abs() < 1e-9);
         // 간선 0은 경도 0.002도 길이 약 180m이고 투영 위치는 그 중간이다
         assert!((s.offset_m - 90.06).abs() < 0.1, "{}", s.offset_m);
+        // 동쪽으로 가는 선분의 방위각은 90도이다
+        assert!((s.bearing_deg - 90.0).abs() < 1e-9, "{}", s.bearing_deg);
 
-        // 간선 1 옆
+        // 간선 1 옆. 북쪽으로 가는 선분의 방위각은 0도이다
         let s = index.nearest(37.0015, 127.0021).unwrap();
         assert_eq!(s.edge, 1);
+        assert!(s.bearing_deg.abs() < 1e-9, "{}", s.bearing_deg);
     }
 }

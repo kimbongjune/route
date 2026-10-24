@@ -87,6 +87,48 @@ async fn send(app: &Router, method: &str, uri: &str, body: Value) -> (StatusCode
     (status, json)
 }
 
+/// 두 방위각의 차이(0~180도)
+fn heading_diff(a: f64, b: f64) -> f64 {
+    let d = (a - b).rem_euclid(360.0);
+    d.min(360.0 - d)
+}
+
+#[tokio::test]
+async fn heading_picks_start_direction() {
+    let app = app();
+    // 서울역 앞 한강대로는 중앙분리 도로라 남쪽·북쪽 방위각에 따라 출발 간선이 다르다
+    let mut first_links = Vec::new();
+    for heading in [180.0, 0.0] {
+        let (status, body) = send(
+            &app,
+            "POST",
+            "/route",
+            json!({"from": {"lat": 37.5547, "lon": 126.9707, "heading": heading}, "to": {"lat": 37.4979, "lon": 127.0276}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let data = &body["data"];
+        let bearing = data["from"]["bearing_deg"].as_f64().expect("bearing_deg");
+        assert!(
+            heading_diff(bearing, heading) <= 90.0,
+            "방위각 {heading}에 출발 간선 방위각 {bearing}"
+        );
+        first_links.push(data["links"][0].as_u64().expect("links[0]"));
+    }
+    assert_ne!(first_links[0], first_links[1]);
+
+    // 방위각 범위 밖은 400
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/route",
+        json!({"from": {"lat": 37.5547, "lon": 126.9707, "heading": 400.0}, "to": {"lat": 37.4979, "lon": 127.0276}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["message"], "방위각 범위를 벗어남: 400");
+}
+
 #[tokio::test]
 async fn route_requests() {
     let app = app();

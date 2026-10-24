@@ -27,7 +27,7 @@ rust/
   routedb/importer-knl/examples/
     order_bench.rs          shp 순서와 힐베르트 순서의 탐색 시간 비교
     astar_bench.rs          다익스트라와 A*의 결과와 탐색 시간 비교
-    route_cli.rs            위경도 두 쌍과 프로파일을 받아 RouteDb로 경로, 거리, 시간, 영업소, 통과제한, 지점, 안내 지점, 도로명 구간 출력
+    route_cli.rs            위경도 두 쌍, 프로파일, 출발 방위각을 받아 RouteDb로 경로, 거리, 시간, 영업소, 통과제한, 지점, 안내 지점, 도로명 구간 출력
     routes_batch.rs         위경도 쌍 CSV를 받아 프로파일별 경로의 링크 열 출력
     cch_bench.rs            line graph CCH build, customize, query 시간과 다익스트라 대조
   nav/api/src/
@@ -502,7 +502,7 @@ CCH 구조는 세 프로파일이 같고 metric만 다르므로 임포터가 거
 
 ## 내비 API
 
-`nav/api`는 routedb-core를 링크하여 `RouteDb`를 `Arc`로 갖고 있는 axum 서버이며, 기능마다 handler, service, model로 나누고 공통 상태와 에러를 `state.rs`, `error.rs`에 정의하는 구조로 구성하였다. `main.rs`는 그래프 폴더의 `moct.rdb`, `moct.cch-struct`, 프로파일별 metric 3개를 열어 `AppState`를 만들고 `lib.rs`의 `app`으로 라우터를 조립하며, 통합 테스트도 같은 `app`을 사용한다. `route/handler.rs`는 HTTP 요청을 받아 service를 호출하고 응답을 만들기만 하고, `route/service.rs`는 axum을 모른 채 위경도 범위를 검증하고 `RouteDb`를 호출하며, `route/model.rs`에 요청·응답 타입을 정의하였다. 데이터 접근 계층은 routedb-core의 `RouteDb` 자체이므로 별도 repository는 없다. 응답은 스프링의 `ResponseEntity`에 공통 본문을 실어 보내는 방식과 같이 성공과 실패가 한 구조이다. `response.rs`의 `ApiResponse`는 HTTP 상태 코드 `status`, 결과 코드 `code`, `message`, 성공일 때만 있는 `data`로 이루어지며 `IntoResponse`에서 `status`를 HTTP 상태 코드로도 사용한다. `error.rs`의 `AppError`는 `BadRequest` 400 BAD_REQUEST, `RouteNotFound` 404 ROUTE_NOT_FOUND, `NotFound` 404 NOT_FOUND(등록되지 않은 주소), `Upstream` 502 UPSTREAM_ERROR로 바뀌며, axum의 `Json`과 `Query`가 본문·쿼리 해석에 실패하면 본문 없는 422나 400을 보내므로 `extract.rs`의 `ApiJson`, `ApiQuery`가 그 실패를 `BadRequest`로 바꾸어 같은 구조로 나가게 한다. `POST /route`는 출발·도착 위경도와 프로파일(distance, time, free, 없으면 distance)을 JSON으로 받아 `Route`를 JSON으로 반환한다. `Route`, `Snap`, `Step`, `RoutePoi`, `RoadSegment`, `Section`과 `Profile`, `PoiKind`, `Turn`, `SignColor`에 `serde`의 `Serialize`를 derive하여 응답을 별도 변환 없이 만들고, 열거형은 `distance`, `camera`, `exit_right`, `green`처럼 소문자로 직렬화한다. 경로 탐색은 CPU 작업이므로 `spawn_blocking`으로 블로킹 스레드에서 실행하며, `Router`가 CCH view를 빌리는 구조라 요청마다 `cch_view`와 `Router`를 새로 만든다. 경로가 없으면 404 ROUTE_NOT_FOUND, 위경도가 범위를 벗어나거나 본문·프로파일이 잘못되면 400 BAD_REQUEST이며 메시지에 serde의 해석 실패 원인이 들어간다.
+`nav/api`는 routedb-core를 링크하여 `RouteDb`를 `Arc`로 갖고 있는 axum 서버이며, 기능마다 handler, service, model로 나누고 공통 상태와 에러를 `state.rs`, `error.rs`에 정의하는 구조로 구성하였다. `main.rs`는 그래프 폴더의 `moct.rdb`, `moct.cch-struct`, 프로파일별 metric 3개를 열어 `AppState`를 만들고 `lib.rs`의 `app`으로 라우터를 조립하며, 통합 테스트도 같은 `app`을 사용한다. `route/handler.rs`는 HTTP 요청을 받아 service를 호출하고 응답을 만들기만 하고, `route/service.rs`는 axum을 모른 채 위경도 범위를 검증하고 `RouteDb`를 호출하며, `route/model.rs`에 요청·응답 타입을 정의하였다. 데이터 접근 계층은 routedb-core의 `RouteDb` 자체이므로 별도 repository는 없다. 응답은 스프링의 `ResponseEntity`에 공통 본문을 실어 보내는 방식과 같이 성공과 실패가 한 구조이다. `response.rs`의 `ApiResponse`는 HTTP 상태 코드 `status`, 결과 코드 `code`, `message`, 성공일 때만 있는 `data`로 이루어지며 `IntoResponse`에서 `status`를 HTTP 상태 코드로도 사용한다. `error.rs`의 `AppError`는 `BadRequest` 400 BAD_REQUEST, `RouteNotFound` 404 ROUTE_NOT_FOUND, `NotFound` 404 NOT_FOUND(등록되지 않은 주소), `Upstream` 502 UPSTREAM_ERROR로 바뀌며, axum의 `Json`과 `Query`가 본문·쿼리 해석에 실패하면 본문 없는 422나 400을 보내므로 `extract.rs`의 `ApiJson`, `ApiQuery`가 그 실패를 `BadRequest`로 바꾸어 같은 구조로 나가게 한다. `POST /route`는 출발·도착 위경도와 프로파일(distance, time, free, 없으면 distance)을 JSON으로 받아 `Route`를 JSON으로 반환한다. `from`에는 선택으로 진행 방위각 `heading`(0~360도)을 넣을 수 있으며 출발 간선을 그 방향에 맞게 고른다(이탈 감지와 재탐색 절). `Route`, `Snap`, `Step`, `RoutePoi`, `RoadSegment`, `Section`과 `Profile`, `PoiKind`, `Turn`, `SignColor`에 `serde`의 `Serialize`를 derive하여 응답을 별도 변환 없이 만들고, 열거형은 `distance`, `camera`, `exit_right`, `green`처럼 소문자로 직렬화한다. 경로 탐색은 CPU 작업이므로 `spawn_blocking`으로 블로킹 스레드에서 실행하며, `Router`가 CCH view를 빌리는 구조라 요청마다 `cch_view`와 `Router`를 새로 만든다. 경로가 없으면 404 ROUTE_NOT_FOUND, 위경도가 범위를 벗어나거나 본문·프로파일이 잘못되면 400 BAD_REQUEST이며 메시지에 serde의 해석 실패 원인이 들어간다.
 
 | 요청 | 응답 |
 |---|---|
@@ -511,6 +511,7 @@ CCH 구조는 세 프로파일이 같고 metric만 다르므로 임포터가 거
 | 출발 33.0, 126.0 | 404 `{"status":404,"code":"ROUTE_NOT_FOUND","message":"경로 없음"}` |
 | 출발 위도 91.0 | 400 BAD_REQUEST, 메시지 "위경도 범위를 벗어남: 91, 126" |
 | `"profile":"fast"` | 400 BAD_REQUEST, 메시지 "본문이 잘못됨: Failed to deserialize the JSON body into the target type: profile: unknown variant `fast`, expected one of `distance`, `time`, `free` at line 1 column 91" |
+| 출발에 `"heading": 400` | 400 BAD_REQUEST, 메시지 "방위각 범위를 벗어남: 400" |
 | `GET /nothing` | 404 `{"status":404,"code":"NOT_FOUND","message":"없는 주소: /nothing"}` |
 
 응답의 `elapsed_ms`는 스냅부터 `Route` 생성까지의 시간이며 `Router`를 재사용하는 경로 CLI의 1ms보다 긴 것은 요청마다 `PathQuery` 버퍼를 교차로 수만큼 할당하기 때문이다. `Router` 재사용은 가중치 갱신 시 metric 묶음을 `Arc`로 바꾸는 구조와 맞물리므로 실시간 반영 뒤에 정할 예정이다.
@@ -604,9 +605,21 @@ metric은 `Metrics`가 프로파일 3개의 `Arc<MetricSource>`로 갖고 있으
 
 지도 카메라는 기본이 북쪽 위, 기울기 0이며 위치를 따라 줌 16 이상으로 이동한다. 진행 방위각은 5m 넘게 움직였을 때 이전 스냅 점에서 현재 스냅 점으로의 방위각으로 정하고 위치 마커의 화살표를 그만큼 돌린다. 마커는 `rotationAlignment: "map"`으로 지도와 함께 돌므로 화살표에는 진행 방위각만 준다. "진행방향 위"를 체크하면 지도 방위를 진행 방위각으로, 기울기를 45°로 하고 현재 위치를 화면 아래쪽(위 여백 40%)에 놓는다. 다만 브이월드 2D 타일은 글자가 그림에 들어 있어 지도가 돌면 글자도 함께 돌므로 기본은 북쪽 위로 정하였고, 글자가 바로 서는 회전은 10단계 벡터 타일 뒤에 할 예정이다.
 
-음성은 Web Speech API `SpeechSynthesisUtterance`(ko-KR, 속도 1.05)이며 "음성" 체크를 끄면 말하지 않는다. 안내 시점은 일반도로 1,000·300·50m, 고속도로 출구 2,000·1,000·500·50m이고 마지막은 "잠시 후"로 읽으며 한 단계를 말하면 그보다 먼 단계는 지난 것으로 처리한다. 문장은 "300미터 앞 남영역앞교차로에서 좌회전입니다" 꼴이고 거리는 1km 미만은 50m 단위, 그 위는 소수 한 자리 킬로미터이며 교차로 이름은 서버의 `is_intersection_name`과 같은 규칙으로 지번을 뺀다. 분기가 4개 이상이면 "1시 방향"이고 출구는 "영동고속도로 방면, 분홍색 유도선입니다"를 더한다. 회전 안내는 말하던 것을 끊고 바로 말한다.
+음성은 Web Speech API `SpeechSynthesisUtterance`(ko-KR, 속도 1.05)이며 "음성" 체크를 끄면 말하지 않는다. 안내 시점은 일반도로 300·50m, 고속도로 출구 1,000·500·50m이고 마지막은 "잠시 후"로 읽으며, 아직 말하지 않은 단계 중 남은 거리 안에 든 것이 여럿이면(이탈 직후처럼 안내 지점을 가까이에서 처음 만날 때) 가장 가까운 단계로 한 번만 말하고 나머지는 지난 것으로 처리한다. 문장은 "300미터 앞 남영역앞교차로에서 좌회전입니다" 꼴이고 거리는 1km 미만은 50m 단위, 그 위는 소수 한 자리 킬로미터이며 교차로 이름은 서버의 `is_intersection_name`과 같은 규칙으로 지번을 뺀다. 분기가 4개 이상이면 "1시 방향"이고 출구는 "영동고속도로 방면, 분홍색 유도선입니다"를 더한다. 회전 안내는 경고 음성이 나오는 중이면 끊고 바로 말하지만, 다른 회전 안내나 재탐색 문장이 나오는 중이면 뒤에 이어 말한다.
 
-경고는 보통 내비게이션의 규칙을 따라 과속카메라와 단속 카메라는 600m(티맵 일반도로 기본값), 과속방지턱·요금소·사고다발 구간은 300m 앞에서 화면 알림을 한 번 보이고 8초 뒤 지운다. 음성은 과속 단속 카메라가 "600미터 앞 과속 단속 카메라입니다. 제한 속도 50", 방지턱이 "과속방지턱입니다", 요금소가 "전방에 요금소가 있습니다"이고 사고다발 구간은 화면으로만 알리며 문구도 유형만 보인다. 다음 회전 안내가 300m 안에 있거나 말하는 중이면 경고 음성은 미루고 지점을 지나기 전까지 다시 시도한다. 100m 안에 이어지는 과속방지턱은 "과속방지턱 연속 구간"으로 묶어 한 번만 알린다. 과속카메라 300m 앞에서 현재 속도가 문구의 제한속도를 넘으면 880Hz 경고음 두 번과 "제한 속도를 초과했습니다"를 한 번 알린다. 정적 파일 응답에는 `Cache-Control: no-cache`를 주어 수정한 파일이 바로 반영되게 하고 패널에 화면 버전을 표시한다.
+경고는 보통 내비게이션의 규칙을 따라 과속카메라와 단속 카메라는 600m(티맵 일반도로 기본값), 과속방지턱·요금소·사고다발 구간은 300m 앞에서 화면 알림을 한 번 보이고 8초 뒤 지운다. 음성은 과속 단속 카메라가 "600미터 앞 과속 단속 카메라입니다. 제한 속도 50", 방지턱이 "과속방지턱입니다", 요금소가 "전방에 요금소가 있습니다"이고 사고다발 구간은 화면으로만 알리며 문구도 유형만 보인다. 다음 회전 안내가 300m 안에 있거나 말하는 중이면 경고 음성은 미루고 지점을 지나기 전까지 다시 시도한다. 100m 안에 이어지는 과속방지턱은 "과속방지턱 연속 구간"으로 묶어 한 번만 알린다. 과속카메라 300m 앞에서 현재 속도가 문구의 제한속도를 넘으면 880Hz 경고음 두 번과 "제한 속도를 초과했습니다"를 한 번 알린다. 안내 시점은 처음에 일반도로 1,000·300·50m, 고속도로 출구 2,000·1,000·500·50m로 정하였으나 일반도로 1km 앞 안내가 과하여 2026-10-24에 일반도로 300m, 고속도로 출구 1km·500m로 줄였다. 완성차 순정 내비 매뉴얼(기아·제네시스 5세대)은 일반도로 700·300·약 100m 3회, 고속도로 출구·분기 약 3km·1km·500m이며 티맵·카카오내비는 안내 거리를 공개하지 않았다. 정적 파일 응답에는 `Cache-Control: no-cache`를 주어 수정한 파일이 바로 반영되게 하고 패널에 화면 버전을 표시한다.
+
+### 이탈 감지와 재탐색
+
+이탈 기준은 카카오내비와 티맵이 수치를 공개하지 않아 Mapbox Navigation SDK의 기본값을 따랐다. Mapbox는 경로에서 50m 넘게 벗어나면 재탐색하고, 교차로 40m 안에서는 25m, 스냅 허용 거리는 15m이며 진행 방향이 틀린 위치 4회 연속이나 뒤로 50m 넘게 움직인 위치 3회 연속도 재탐색 조건이다. HERE SDK는 거리 기준을 앱에 맡기되 이벤트 3회 또는 10초를 기다리고 마지막 요청에서 50m 이상 움직였을 때만 다시 요청하며 새 경로 요청에 진행 방위각을 넣을 것을 권한다. 06 문서에 기록한 대로 표준노드링크 좌표가 실제 도로에서 25~30m 어긋나는 곳이 있으므로 15m와 25m 기준은 사용하지 않았다. `app.js`는 경로에서 `OFF_ROUTE_M` 50m 넘게 떨어진 위치가 `OFF_ROUTE_COUNT` 3회 연속이거나, 유턴하여 되돌아가는 경우를 잡기 위해 지금까지의 최대 진행 거리보다 `BACKTRACK_M` 50m 넘게 뒤인 위치가 3회 연속이면 이탈로 판정한다. 이탈하면 "경로를 이탈하여 재탐색합니다"를 말하고 현재 위치를 출발, 기존 도착지와 프로파일을 그대로 `POST /route`에 보내며, 응답이 오기 전에는 다시 보내지 않고 그 뒤에는 마지막 요청 지점에서 `REROUTE_MIN_MOVE_M` 50m 이상 움직였을 때만 보낸다. 새 경로가 오면 경로선, 요약, 안내문 목록, 추적용 좌표 열을 바꾸고 말한 안내와 이탈 상태를 처음으로 되돌리며 화면은 이동하지 않는다. 시뮬레이션은 경로를 벗어나지 않으므로 시뮬레이션 중 지도를 클릭하면 가짜 위치가 그 지점에 멈추어 3초 뒤 이탈로 판정되고 재탐색된 경로의 처음부터 다시 간다. HERE의 기존 경로 복귀 탐색과 특허 KR20100038565A의 분기 노드 합류 판정은 서버와 프론트에 추가 구조가 필요하여 넣지 않았다.
+
+재탐색 경로가 달리던 방향으로 시작하도록 `POST /route`의 `from`에 선택 항목 `heading`(진북 0, 시계 방향 0~360도)을 더하였다. `snap.rs`의 `Snap`에 투영한 선분의 진행 방위각 `bearing_deg`를 넣고, `Router::route_with_heading`은 출발 후보 간선 5개 가운데 방위각 차이가 `HEADING_TOLERANCE_DEG` 90도를 넘는 것을 빼며 모두 빠지면 방위각 없이 고른다. 중앙분리 도로는 반대 방향 간선이 180도 차이라 깨끗하게 갈린다. 프론트는 재탐색 요청에 추적 중 계산한 진행 방위각을 넣고, 처음 요청은 "현재 위치"의 GPS `coords.heading`이 있을 때만 넣는다. 서울역 서쪽 청파로(37.5547, 126.9707)에서 강남역까지 `route_cli`로 확인한 결과는 아래와 같다. 방위각 0도(북쪽)이면 북행 간선에서 시작하여 34m 뒤 유턴 안내가 생기고, 180도이면 방위각 없을 때와 같은 남행 간선이다.
+
+| 출발 방위각 | 출발 간선 | 간선 방위각 | 거리 | 링크 | 안내 지점 |
+|---|---|---|---|---|---|
+| 없음 | 1020021703 | 180° | 10,063m | 104 | 7 |
+| 180° | 1020021703 | 180° | 10,063m | 104 | 7 |
+| 0° | 1020021805 | 1° | 10,198m | 109 | 8, 첫 안내 34m 유턴 |
 
 ## 코드 규약
 
@@ -721,7 +734,7 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 
 ## 테스트
 
-`cargo test --workspace`로 53개를 실행한다. `geocode_api`는 `.env`의 키로 브이월드를 실제로 호출하며 키가 없으면 건너뛴다. `route_api`는 전국 그래프 파일을 열어 라우터에 요청을 보내므로 debug 빌드에서는 R-tree 생성에 129초가 소요되고 `cargo test --release -p nav-api`로는 3초이다.
+`cargo test --workspace`로 54개를 실행한다. `geocode_api`는 `.env`의 키로 브이월드를 실제로 호출하며 키가 없으면 건너뛴다. `route_api`는 전국 그래프 파일을 열어 라우터에 요청을 보내므로 debug 빌드에서는 R-tree 생성에 129초가 소요되고 `cargo test --release -p nav-api`로는 3초이다.
 
 | 파일 | 테스트 | 확인 내용 |
 |---|---|---|
@@ -736,7 +749,7 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 | `graph.rs` | `node_name_table` | 같은 교차로 이름 두 개가 한 번호, 이름 없는 교차로는 0번 |
 | `graph.rs` | `road_name_table` | 같은 도로명 링크 두 개가 한 번호, 이름 없는 링크는 0번 |
 | `route.rs` | `merge_same_names` | 도로명 1, 1, 2, 1, 1 링크 5개가 구간 3개, 빈 입력은 빈 결과 |
-| `route.rs` | `turn_angles_and_classes` | 350°→10°가 20°, 90°→270°가 180°, 각도별 회전 방향, 북·동으로 가는 선의 방위각 0°·90° |
+| `route.rs` | `turn_angles_and_classes` | 350°→10°가 20°, 90°→270°가 180°, 방위각 차이 350°·10°가 20°와 반대 방향 180°, 각도별 회전 방향, 북·동으로 가는 선의 방위각 0°·90° |
 | `route.rs` | `sign_colors` | 101·102·103은 녹색, 104·107은 청색 |
 | `route.rs` | `clock_hours_and_branches` | 0°·-10°가 12시, 30°가 1시, -30°가 11시, 175°가 6시, 20m 교차로 안 링크 너머까지 센 분기 3개와 되돌아가는 링크 제외 |
 | `route.rs` | `turn_points_skip_short_links` | 12m 교차로 링크를 건너뛴 우회전 90°, 같은 도로의 30° 꺾임과 도로명만 바뀌는 직진은 안내 없음, 도로명이 바뀌는 30° 꺾임은 우측 방향, 짧은 도착 링크의 유턴, 같은 도로 사이에 낀 32m 옆길은 안내 없음이고 양쪽 도로가 다르면 안내 2개 |
@@ -745,14 +758,14 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 | `hilbert.rs` | `order1`, `next_index_is_neighbor_cell` | 2×2 순서, 순번이 이어지는 칸끼리 인접 |
 | `dijkstra.rs` | `shortest_from_ga_to_ma`, `unreachable`, `same_node` | 더 짧은 경로 선택, 경로 없음, 출발과 도착이 같음 |
 | `astar.rs` | `haversine_seoul_busan`, `same_result_as_dijkstra`, `unreachable` | 서울역·부산역 대원 거리, 다익스트라와 같은 경로, 경로 없음 |
-| `snap.rs` | `nearest_segment` | 동서·남북 선분 두 개에서 가까운 간선, 거리 11.1m, 간선 시작점에서의 거리 90m |
+| `snap.rs` | `nearest_segment` | 동서·남북 선분 두 개에서 가까운 간선, 거리 11.1m, 간선 시작점에서의 거리 90m, 동쪽 선분의 방위각 90°와 북쪽 선분 0° |
 | `hierarchy.rs` | `same_as_dijkstra_with_one_way` | 일방통행 포함 데모 그래프 25쌍의 거리와 간선 열이 다익스트라와 일치 |
 | `linegraph.rs` | `build_demo_line_graph` | 데모 그래프의 통행, 금지 회전 제거, U턴 제거와 허용, 막다른 길 U턴 |
 | `linegraph.rs` | `expand_intersection_group` | 모퉁이 4개 교차로의 그룹과 내부 링크, 우회전·직진·좌회전 통행의 비용과 경유 링크, 좌회전 금지, U턴 허용, 경유 링크를 `ST_LINK`로 둔 금지 |
 | `linegraph.rs` | `join_rule_path_over_long_link` | 30m 연결 링크가 낀 U턴이 25m 그룹으로는 걸리지 않고, 회전정보 경로로 묶으면 걸리며 금지보다 우선 |
 | `linegraph.rs` | `bridge_uturn_without_link` | 잇는 링크가 없는 011에 건너가는 통행이 생기고 비용이 8m와 진출 링크 길이의 합 |
 | `profile.rs` | `time_and_free_weights` | 링크 4개 통행 4개의 시간 가중치, 건너가는 10m의 시간, 배율 2인 링크를 지나는 통행의 시간 증가, 배율 무한대인 링크로 가는 통행 차단, 요금소·고속국도로 들어가는 통행 3개가 `INF_WEIGHT`, 거리 가중치 cm |
-| `nav/api` `service.rs` | `lat_lon_out_of_range_is_rejected` | 위도 91, 경도 -181은 400 |
+| `nav/api` `service.rs` | `lat_lon_out_of_range_is_rejected` | 위도 91, 경도 -181, 방위각 361은 400 |
 | `nav/api` `collector/mod.rs` | `stale_after_three_missed_polls` | 실패 두 번까지는 유지, 세 번째 간격부터 한 번만 되돌림, 성공하면 처음부터 다시 셈 |
 | `nav/api` `collector/incident.rs` | `block_levels`, `parse_items_and_errors` | 세부유형 23·26·31과 "전면" 문구는 전면 통제, 30과 "부분"·차단 차로는 부분 통제, 고장 01은 통제 없음, 기술기준 샘플 한 건 해석, 4005는 에러, 빈 본문은 빈 목록 |
 | `nav/api` `collector/traffic.rs` | `tiles_cover_korea`, `parse_items_and_errors` | 1.5도 타일 16개의 첫·끝 범위, 응답 두 건 해석, `resultCode` 4001은 에러, `items`가 null이면 빈 목록 |
@@ -761,6 +774,7 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 | `nav/api` `accident/index.rs` | `sections_along_route`, `parse_ring_rejects_bad_text` | 겹치는 정사각형 두 개가 한 구간이고 경계에 닿는 선분까지 0~500m, 떨어진 정사각형은 600~1,000m, 밖을 지나면 없음, 점 3개 미만과 숫자 아닌 좌표는 에러 |
 | `nav/api` `geocode/service.rs` | `parse_place_and_not_found` | 브이월드 PLACE 응답의 서울역 한 건 변환과 좌표 없는 건 제외, NOT_FOUND는 빈 목록, ERROR는 502 |
 | `nav/api` `tests/geocode_api.rs` | `geocode_requests` | 서울역 장소 검색의 첫 결과와 좌표 범위, 한강대로 405 주소 검색, 없는 장소는 빈 목록, 빈 검색어는 400 |
+| `nav/api` `tests/route_api.rs` | `heading_picks_start_direction` | 청파로에서 방위각 180°·0°의 출발 간선 방위각이 각각 90° 안이고 첫 링크가 다름, 방위각 400은 400 BAD_REQUEST |
 | `nav/api` `tests/route_api.rs` | `update_channel_applies_and_broadcasts` | 채널로 보낸 전면 통제 묶음이 적용되어 순번 1 이벤트가 오고 경로가 그 링크를 피함, 돌발 배율 되돌리기 뒤 순번 2 `reset` 이벤트와 처음 경로 복귀 |
 | `nav/api` `tests/route_api.rs` | `weight_updates_change_route` | 가운데 링크 전면 통제 뒤 경로가 그 링크를 피함, 속도 배율 2 뒤 시간 증가와 거리 경로 불변, 되돌리면 처음과 같음 |
 | `nav/api` `tests/route_api.rs` | `route_requests` | 서울역→강남역 링크 104개와 첫 안내 좌회전 한강대로77길, 서울역→부산역 최소시간 영업소 4곳과 신갈JC 분홍색 유도선 안내문, 사고다발 구간이 있고 시작 거리가 끝 거리 이하, 안내문 7개와 첫 안내문 "남영역앞교차로에서 좌회전, 한강대로77길", 경고 맨 앞이 높이 제한 3.8m이고 거리 순서, 바다 출발 404 ROUTE_NOT_FOUND, 위도 91과 프로파일 fast는 400 BAD_REQUEST, 없는 주소 404 NOT_FOUND |

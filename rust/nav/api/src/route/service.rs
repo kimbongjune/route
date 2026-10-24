@@ -26,8 +26,9 @@ pub async fn find_route(
         let cch_view = db.cch_view();
         let metrics = db.metrics();
         let mut router = db.router(&cch_view, &metrics);
-        let route = router.route(
+        let route = router.route_with_heading(
             (input.from.lat, input.from.lon),
+            input.from.heading,
             (input.to.lat, input.to.lon),
             input.profile,
         );
@@ -52,8 +53,15 @@ pub async fn find_route(
     })
 }
 
-/// 위도 -90~90, 경도 -180~180 범위를 확인한다
+/// 위도 -90~90, 경도 -180~180, 방위각 0~360 범위를 확인한다
 fn validate_lat_lon(point: LatLon) -> Result<(), AppError> {
+    if let Some(heading) = point.heading
+        && !(0.0..=360.0).contains(&heading)
+    {
+        return Err(AppError::BadRequest(format!(
+            "방위각 범위를 벗어남: {heading}"
+        )));
+    }
     if !(-90.0..=90.0).contains(&point.lat) || !(-180.0..=180.0).contains(&point.lon) {
         return Err(AppError::BadRequest(format!(
             "위경도 범위를 벗어남: {}, {}",
@@ -72,21 +80,32 @@ mod tests {
         assert_eq!(
             validate_lat_lon(LatLon {
                 lat: 37.5,
-                lon: 127.0
+                lon: 127.0,
+                heading: None
             }),
             Ok(())
         );
         assert!(
             validate_lat_lon(LatLon {
+                lat: 37.5,
+                lon: 127.0,
+                heading: Some(361.0)
+            })
+            .is_err()
+        );
+        assert!(
+            validate_lat_lon(LatLon {
                 lat: 91.0,
-                lon: 127.0
+                lon: 127.0,
+                heading: None
             })
             .is_err()
         );
         assert!(
             validate_lat_lon(LatLon {
                 lat: 37.5,
-                lon: -181.0
+                lon: -181.0,
+                heading: None
             })
             .is_err()
         );

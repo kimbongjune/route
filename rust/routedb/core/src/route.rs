@@ -694,9 +694,29 @@ impl RouteDb {
     }
 }
 
+/// 출발 방위각과 간선 방위각의 차이가 이 각도를 넘는 출발 후보는 뺀다. 반대 방향 간선은 180도 차이이다
+pub const HEADING_TOLERANCE_DEG: f64 = 90.0;
+
+/// 두 방위각의 차이(0~180도)
+pub fn heading_diff(a: f64, b: f64) -> f64 {
+    let d = (a - b).rem_euclid(360.0);
+    d.min(360.0 - d)
+}
+
 impl Router<'_> {
     /// 출발·도착 위경도로 경로를 구한다. 가까운 간선 5개씩의 25개 조합 중 출발 스냅 거리, 경로 거리, 도착 스냅 거리의 합이 가장 작은 조합이다.
     pub fn route(&mut self, from: (f64, f64), to: (f64, f64), profile: Profile) -> Option<Route> {
+        self.route_with_heading(from, None, to, profile)
+    }
+
+    /// 출발 방위각이 있으면 그 방향과 `HEADING_TOLERANCE_DEG` 안에서 맞는 출발 간선만 후보로 한다. 맞는 간선이 없으면 방위각 없이 구한다.
+    pub fn route_with_heading(
+        &mut self,
+        from: (f64, f64),
+        from_heading: Option<f64>,
+        to: (f64, f64),
+        profile: Profile,
+    ) -> Option<Route> {
         let db = self.db;
         let file = &db.file;
         let (turn_first_out, turn_head, turn_weight, length) = (
@@ -707,7 +727,17 @@ impl Router<'_> {
         );
         let metric_view = &self.metrics.view(profile);
         let query = &mut self.query;
-        let froms = db.index.nearest_n(from.0, from.1, 5);
+        let mut froms = db.index.nearest_n(from.0, from.1, 5);
+        if let Some(heading) = from_heading {
+            let matched: Vec<Snap> = froms
+                .iter()
+                .filter(|s| heading_diff(s.bearing_deg, heading) <= HEADING_TOLERANCE_DEG)
+                .cloned()
+                .collect();
+            if !matched.is_empty() {
+                froms = matched;
+            }
+        }
         let tos = db.index.nearest_n(to.0, to.1, 5);
         let mut best: Option<(Snap, Snap, f64, Vec<u32>)> = None;
         for from in &froms {
@@ -957,6 +987,10 @@ mod tests {
         assert_eq!(turn_angle(350.0, 10.0), 20.0);
         assert_eq!(turn_angle(10.0, 350.0), -20.0);
         assert_eq!(turn_angle(90.0, 270.0), 180.0);
+        // 방위각 차이는 0~180도이며 반대 방향은 180도이다
+        assert_eq!(heading_diff(350.0, 10.0), 20.0);
+        assert_eq!(heading_diff(0.0, 180.0), 180.0);
+        assert_eq!(heading_diff(90.0, -90.0), 180.0);
         assert_eq!(classify(5.0), Turn::Straight);
         assert_eq!(classify(30.0), Turn::SlightRight);
         assert_eq!(classify(-30.0), Turn::SlightLeft);
