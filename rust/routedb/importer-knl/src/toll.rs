@@ -2,10 +2,6 @@ use std::path::Path;
 
 use routedb_core::graph::TollInput;
 
-/// 요금지점_링크.csv 위치
-pub const TOLL_LINKS_LOCATION: &str =
-    r"C:\Users\nocdu\Desktop\dev\route\maps\유료도로\요금지점_링크.csv";
-
 /// 요금지점_링크.csv에서 행별 LINK_ID와 영업소코드를 추출한다.
 pub fn read_toll_links(path: &Path) -> Vec<TollInput> {
     let mut reader = csv::Reader::from_path(path).expect("CSV를 열 수 없음");
@@ -33,7 +29,7 @@ mod tests {
 
     #[test]
     fn read_toll_link_rows() {
-        let tolls = read_toll_links(Path::new(TOLL_LINKS_LOCATION));
+        let tolls = read_toll_links(&crate::paths::toll_links());
         assert_eq!(tolls.len(), 4497);
         assert!(tolls.contains(&TollInput::new(1410199400, 246)));
     }

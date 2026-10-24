@@ -1,10 +1,10 @@
 mod coord;
 mod moct;
+mod paths;
 mod poi;
 mod toll;
 
 use std::collections::HashMap;
-use std::path::Path;
 use std::time::Instant;
 
 use routedb_core::file::GraphFile;
@@ -16,18 +16,9 @@ use routedb_core::snap::LinkIndex;
 use routedb_core::{dijkstra, hilbert};
 
 use coord::TmToWgs84;
-use moct::MOCT_SHPFILE_FOLDER_LOCATION;
-
-const GRAPH_FILE_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.rdb";
-const CCH_STRUCT_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-struct";
-const CCH_METRIC_LOCATION: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-metric";
-const CCH_METRIC_TIME_LOCATION: &str =
-    r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-metric-time";
-const CCH_METRIC_FREE_LOCATION: &str =
-    r"C:\Users\nocdu\Desktop\dev\route\maps\routedb\moct.cch-metric-free";
 
 fn main() {
-    let folder = Path::new(MOCT_SHPFILE_FOLDER_LOCATION);
+    let folder = &paths::moct_folder();
     let nodes = moct::read_nodes(folder);
     let links = moct::read_links(folder);
     let node_types: HashMap<u64, u16> = moct::read_node_types(folder).into_iter().collect();
@@ -66,7 +57,7 @@ fn main() {
     );
 
     // 요금 지점 링크의 영업소코드
-    let tolls = toll::read_toll_links(Path::new(toll::TOLL_LINKS_LOCATION));
+    let tolls = toll::read_toll_links(&paths::toll_links());
     let missing = graph.set_tolls(&tolls);
     let toll_edges = (0..graph.edge_count())
         .filter(|&e| !graph.tolls_of(e).is_empty())
@@ -79,9 +70,9 @@ fn main() {
         graph.toll_unit.len()
     );
     // 카메라와 방지턱 지점
-    let mut pois = poi::read_cameras(Path::new(poi::CAMERA_LINKS_LOCATION));
+    let mut pois = poi::read_cameras(&paths::camera_links());
     let cameras = pois.len();
-    pois.extend(poi::read_bumps(Path::new(poi::BUMP_LINKS_LOCATION)));
+    pois.extend(poi::read_bumps(&paths::bump_links()));
     let missing = graph.set_pois(&pois);
     let poi_edges = (0..graph.edge_count())
         .filter(|&e| !graph.poi_range(e).is_empty())
@@ -269,7 +260,7 @@ fn main() {
     );
 
     // 그래프 파일 저장
-    let output = Path::new(GRAPH_FILE_LOCATION);
+    let output = &paths::graph_file();
     std::fs::create_dir_all(output.parent().expect("그래프 파일 경로에 폴더가 없음"))
         .expect("폴더를 만들 수 없음");
     graph
@@ -486,19 +477,20 @@ fn main() {
         cch.cch_arc_count(),
         started.elapsed().as_secs_f64()
     );
-    cch.save_struct(Path::new(CCH_STRUCT_LOCATION))
+    let (cch_struct, cch_metric) = (paths::cch_struct(), paths::cch_metric());
+    cch.save_struct(&cch_struct)
         .expect("CCH 구조를 저장할 수 없음");
     metric
-        .save(Path::new(CCH_METRIC_LOCATION))
+        .save(&cch_metric)
         .expect("CCH metric을 저장할 수 없음");
     println!(
         "저장 {} {}바이트, {} {}바이트",
-        CCH_STRUCT_LOCATION,
-        std::fs::metadata(CCH_STRUCT_LOCATION)
+        cch_struct.display(),
+        std::fs::metadata(&cch_struct)
             .expect("파일 크기를 읽을 수 없음")
             .len(),
-        CCH_METRIC_LOCATION,
-        std::fs::metadata(CCH_METRIC_LOCATION)
+        cch_metric.display(),
+        std::fs::metadata(&cch_metric)
             .expect("파일 크기를 읽을 수 없음")
             .len()
     );
@@ -518,15 +510,13 @@ fn main() {
         factor: None,
     };
     for (name, weights, location) in [
-        ("최소시간", profile.time_weights(), CCH_METRIC_TIME_LOCATION),
-        ("무료도로", profile.free_weights(), CCH_METRIC_FREE_LOCATION),
+        ("최소시간", profile.time_weights(), paths::cch_metric_time()),
+        ("무료도로", profile.free_weights(), paths::cch_metric_free()),
     ] {
         let started = Instant::now();
         let metric = cch.customize(&weights);
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
-        metric
-            .save(Path::new(location))
-            .expect("CCH metric을 저장할 수 없음");
+        metric.save(&location).expect("CCH metric을 저장할 수 없음");
         println!(
             "{} customize {:.0}ms 막힌 통행 {} 가중치 합 {}ms 저장 {} {}바이트",
             name,
@@ -537,8 +527,8 @@ fn main() {
                 .filter(|&&w| w != cch::INF_WEIGHT)
                 .map(|&w| w as u64)
                 .sum::<u64>(),
-            location,
-            std::fs::metadata(location)
+            location.display(),
+            std::fs::metadata(&location)
                 .expect("파일 크기를 읽을 수 없음")
                 .len()
         );

@@ -1,0 +1,34 @@
+# docker compose up            내비 API
+# docker compose run importer  그래프 파일과 CCH 생성(배치, 실행 후 종료)
+services:
+  api:
+    build:
+      context: .
+      target: api
+    image: route-nav-api
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./maps:/maps:ro
+    env_file:
+      - .env
+    environment:
+      ROUTE_MAPS_DIR: /maps
+      NAV_ADDR: 0.0.0.0:3000
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+    restart: unless-stopped
+
+  importer:
+    build:
+      context: .
+      target: importer
+    image: route-importer-knl
+    profiles:
+      - import
+    volumes:
+      - ./maps:/maps
+    environment:
+      ROUTE_MAPS_DIR: /maps

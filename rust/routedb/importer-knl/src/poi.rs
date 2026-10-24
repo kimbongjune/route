@@ -3,13 +3,6 @@ use std::path::Path;
 
 use routedb_core::graph::PoiInput;
 
-/// 카메라_링크.csv 위치
-pub const CAMERA_LINKS_LOCATION: &str =
-    r"C:\Users\nocdu\Desktop\dev\route\maps\전국무인교통단속카메라표준데이터\카메라_링크.csv";
-/// 과속방지턱_링크.csv 위치
-pub const BUMP_LINKS_LOCATION: &str =
-    r"C:\Users\nocdu\Desktop\dev\route\maps\과속방지턱정보\행안부\과속방지턱_링크.csv";
-
 fn reader(path: &Path) -> (csv::Reader<File>, csv::StringRecord) {
     let mut reader = csv::Reader::from_path(path).expect("CSV를 열 수 없음");
     let headers = reader.headers().expect("CSV 머리글을 읽을 수 없음").clone();
@@ -84,8 +77,8 @@ mod tests {
 
     #[test]
     fn read_poi_rows() {
-        let cameras = read_cameras(Path::new(CAMERA_LINKS_LOCATION));
-        let bumps = read_bumps(Path::new(BUMP_LINKS_LOCATION));
+        let cameras = read_cameras(&crate::paths::camera_links());
+        let bumps = read_bumps(&crate::paths::bump_links());
         assert_eq!(cameras.len(), 55_899);
         assert_eq!(bumps.len(), 64_662);
         // 첫 카메라는 봉오대로 통행위반 단속, 링크 1670032800의 0.778 지점

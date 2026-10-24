@@ -14,9 +14,6 @@ pub struct Node {
 use shapefile::Shape;
 use shapefile::dbase::{FieldValue, Record};
 
-pub const MOCT_SHPFILE_FOLDER_LOCATION: &str =
-    r"C:\Users\nocdu\Desktop\dev\route\maps\[2026-09-14]NODELINKDATA";
-
 /// shp파일에서 특정 필드를 문자열로 추출한다.
 fn text_field<'a>(record: &'a Record, name: &str) -> Option<&'a str> {
     match record.get(name) {
@@ -186,7 +183,7 @@ mod tests {
     #[test]
     fn count_moct_link_data() {
         let real_count = 1_562_356;
-        let moct_link_data_file = Path::new(MOCT_SHPFILE_FOLDER_LOCATION).join("MOCT_LINK.shp");
+        let moct_link_data_file = crate::paths::moct_folder().join("MOCT_LINK.shp");
         let moct_link_reader = shapefile::Reader::from_path(moct_link_data_file).unwrap();
         assert_eq!(real_count, moct_link_reader.shape_count().unwrap());
     }
@@ -194,14 +191,14 @@ mod tests {
     #[test]
     fn count_moct_node_data() {
         let real_count = 1_183_329;
-        let moct_node_data_file = Path::new(MOCT_SHPFILE_FOLDER_LOCATION).join("MOCT_NODE.shp");
+        let moct_node_data_file = crate::paths::moct_folder().join("MOCT_NODE.shp");
         let moct_node_reader = shapefile::Reader::from_path(moct_node_data_file).unwrap();
         assert_eq!(real_count, moct_node_reader.shape_count().unwrap());
     }
 
     #[test]
     fn check_korean_field_read() {
-        let moct_link_data_file = Path::new(MOCT_SHPFILE_FOLDER_LOCATION).join("MOCT_LINK.shp");
+        let moct_link_data_file = crate::paths::moct_folder().join("MOCT_LINK.shp");
         let mut moct_link_reader = shapefile::Reader::from_path(moct_link_data_file).unwrap();
         let (_, record) = moct_link_reader
             .iter_shapes_and_records()

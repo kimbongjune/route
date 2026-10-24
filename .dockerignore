@@ -1,0 +1,8 @@
+.git
+.env
+rust/target
+maps
+docs
+scripts
+__pycache__
+image*.png

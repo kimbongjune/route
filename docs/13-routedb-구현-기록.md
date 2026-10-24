@@ -24,6 +24,7 @@ rust/
     toll.rs                 요금지점_링크.csv 읽기
     poi.rs                  카메라_링크.csv, 과속방지턱_링크.csv 읽기
     coord.rs                TM에서 WGS84 변환
+    paths.rs                데이터 파일 위치. ROUTE_MAPS_DIR 아래 입력 파일과 출력 폴더
   routedb/importer-knl/examples/
     order_bench.rs          shp 순서와 힐베르트 순서의 탐색 시간 비교
     astar_bench.rs          다익스트라와 A*의 결과와 탐색 시간 비교
@@ -621,6 +622,27 @@ metric은 `Metrics`가 프로파일 3개의 `Arc<MetricSource>`로 갖고 있으
 | 180° | 1020021703 | 180° | 10,063m | 104 | 7 |
 | 0° | 1020021805 | 1° | 10,198m | 109 | 8, 첫 안내 34m 유턴 |
 
+## 도커와 배포
+
+`Dockerfile`은 저장소 루트에 있으며 빌드 단계 하나와 실행 이미지 두 개의 멀티스테이지이다. 빌드 단계는 `rust:1.98-bookworm`에서 `rust/`를 복사해 `nav-api`와 `importer-knl`만 release로 빌드하고, `api` 이미지는 `debian:bookworm-slim`에 브이월드·its.go.kr HTTPS 호출에 필요한 `ca-certificates`, 실행 파일, `nav/web` 정적 파일을 넣으며, `importer` 이미지는 실행 파일만 넣는다. `.dockerignore`로 `rust/target`, `maps`, `.env`, `docs`, `scripts`를 빌드 컨텍스트에서 뺀다. 이미지 크기는 `api` 142MB, `importer` 116MB이다.
+
+컨테이너 안에서 데이터 위치를 정할 수 있도록 윈도우 절대 경로 상수를 환경 변수로 수정하였다. 임포터는 `paths.rs`가 `ROUTE_MAPS_DIR`(없으면 저장소의 `maps`) 아래에서 표준노드링크 폴더, 요금지점·카메라·방지턱 CSV, 출력 폴더 `routedb`를 정하고, `nav-api`는 같은 변수로 그래프 폴더, 사고다발 폴리곤, 유도선 CSV의 기본 위치를 정하며 인자가 있으면 인자를 우선한다. 바인드 주소는 `NAV_ADDR`(없으면 127.0.0.1:3000), 정적 파일 폴더는 `NAV_WEB_DIR`(없으면 저장소의 `nav/web`)이다. 인증키는 전처럼 환경 변수 또는 `.env`에서 읽는다.
+
+`compose.yaml`은 `api`와 `importer` 두 서비스이다. `api`는 `./maps`를 `/maps`에 읽기 전용으로 마운트하고 `.env`를 `env_file`로 넣어 `VWORLD_API_KEY`, `ITS_API_KEY`, 폴링 간격이 환경 변수로 들어가며, 3000 포트를 열고 메모리 상한 4GB, `restart: unless-stopped`이다. `importer`는 `import` 프로파일이라 `docker compose up`에는 들어가지 않고 `docker compose run --rm importer`로 실행하며 `./maps`를 읽기·쓰기로 마운트하여 `/maps/routedb`에 결과를 쓴다. routedb 파일 673MB는 이미지에 넣지 않고 볼륨으로 공유하며 갱신은 임포터 실행과 `api` 재시작이다. postgis와 geoserver는 2차에 더한다.
+
+Docker Desktop(윈도우, Docker 29.4.0, Compose v5.1.2)에서 확인한 결과는 아래와 같다. `api` 컨테이너의 첫 요청은 바인드 마운트한 그래프 파일을 mmap으로 읽어 들이느라 느리고 두 번째부터는 로컬과 같다.
+
+| 항목 | 값 |
+|---|---|
+| `api` 이미지 빌드 | 45초(빌드 단계 컴파일 24초) |
+| `api` 시작 | 그래프와 CCH 번들 열기 5.4초, 첫 응답까지 6초 |
+| 서울역 → 부산역 최소시간 | 첫 요청 178.5ms, 이후 5.9ms |
+| 서울역 → 강남역 거리, 지오코딩 서울역, 타일 12/3487/1583 | 링크 104개, 554건, image/png 11,495바이트 |
+| `api` 메모리 | 1.45GiB / 상한 4GiB |
+| `importer` 실행 | 1분 12초~1분 22초(CCH 28.5초) |
+
+컨테이너(리눅스)에서 만든 그래프 파일은 윈도우에서 만든 것과 통행 수가 1개 다르다. 윈도우는 통행 1,583,618개에 뺀 U턴 통행 345,455개, 리눅스는 1,583,617개에 345,456개이며 리눅스에서 두 번 실행한 결과는 바이트까지 같았다. 노드, 간선, 링크 좌표, 경유 링크, 영업소, 지점, 도로명, 교차로 이름 수는 같다. U턴 판정이 좌표로 계산한 각도 비교이므로 두 플랫폼 수학 라이브러리의 마지막 자리 차이로 경계값 하나가 뒤집힌 것으로 보이며, 이 때문에 CCH 간선도 7,754,138개와 7,749,595개로 다르다. 어느 통행인지는 확인하지 않았다. 배포하는 그래프 파일은 한 플랫폼에서 만든 것을 사용하며 이 문서의 수치는 윈도우 기준이다.
+
 ## 코드 규약
 
 Rust 코드는 구글 Rust 스타일 가이드를 따른다. `rust/rustfmt.toml`에 `max_width = 100`을 두고 `cargo fmt`로 형식을 맞추며, 다른 모듈의 함수는 `hierarchy::edges_of_node_path`처럼 모듈명을 붙여 호출하고 타입은 `use`로 가져와 모듈명 없이 사용한다. 함수 인자와 반환값의 튜플은 `NodeInput`, `TollInput`, `PoiInput`처럼 이름 있는 필드의 구조체로 두었고 위경도 쌍 `(f64, f64)`만 튜플로 남겼다. 실패할 수 있는 `unwrap`은 이유를 적은 `expect`로 바꾸었고, `lg`, `cch_v` 같은 줄임 변수명은 `line_graph`, `cch_view`로 풀었으며, 입력 구조체에는 `Clone`, `Debug`, `PartialEq`를 `derive`하였다.
@@ -796,6 +818,9 @@ cargo run --release -p importer-knl --example route_cli -- 37.5547 126.9707 35.1
 cargo run --release -p importer-knl --example routes_batch -- pairs.csv free
 cargo run --release -p importer-knl --example cch_bench
 cargo run --release -p nav-api
+docker compose up -d
+docker compose run --rm importer
+docker compose down
 curl -X POST http://127.0.0.1:3000/route -H "Content-Type: application/json" -d '{"from":{"lat":37.5547,"lon":126.9707},"to":{"lat":37.4979,"lon":127.0276},"profile":"time"}'
 # Windows cmd는 작은따옴표를 인식하지 않으므로 큰따옴표를 이스케이프한다
 curl -X POST http://127.0.0.1:3000/route -H "Content-Type: application/json" -d "{\"from\":{\"lat\":37.5547,\"lon\":126.9707},\"to\":{\"lat\":37.4979,\"lon\":127.0276},\"profile\":\"time\"}"

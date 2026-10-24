@@ -1,13 +1,15 @@
 //! 내비 API 서버. 그래프 파일을 열어 `AppState`를 만들고 lib.rs의 `app`으로 라우터를 조립한다.
 //!
-//! cargo run --release -p nav-api -- [그래프 폴더] [주소] [사고다발 폴리곤 CSV]
+//! cargo run --release -p nav-api -- [그래프 폴더] [주소] [사고다발 폴리곤 CSV] [유도선 CSV]
 //! 그래프 폴더는 moct.rdb, moct.cch-struct, moct.cch-metric, moct.cch-metric-time, moct.cch-metric-free가 있는 폴더이다.
+//! 인자가 없으면 데이터 폴더(환경 변수 ROUTE_MAPS_DIR, 없으면 저장소의 maps) 아래의 기본 위치이고 주소는 NAV_ADDR, 없으면 127.0.0.1:3000이다.
+//! 정적 파일 폴더는 NAV_WEB_DIR, 없으면 저장소의 nav/web이다.
 //! 브이월드 인증키는 환경 변수 VWORLD_API_KEY 또는 저장소 루트 .env의 VWORLD_API_KEY에서 읽는다.
 //! 국가교통정보센터 인증키 ITS_API_KEY와 폴링 간격 TRAFFIC_POLL_SECS가 모두 있을 때만 소통정보 폴링 태스크를 실행하고,
 //! INCIDENT_POLL_SECS가 있을 때만 돌발정보 폴링 태스크를 실행한다.
 //! 인증키의 월 호출 한도가 1,000건이라 폴링 한 번(타일 16번)마다 한도를 쓰므로 기본으로는 폴링하지 않는다.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,13 +20,17 @@ use nav_api::state::AppState;
 use routedb_core::route::RouteDb;
 use tokio::sync::broadcast;
 
-const DEFAULT_GRAPH_DIR: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb";
+/// `ROUTE_MAPS_DIR`이 없을 때의 데이터 폴더
+const DEFAULT_MAPS_DIR: &str = r"C:\Users\nocdu\Desktop\dev\route\maps";
 const DEFAULT_ADDR: &str = "127.0.0.1:3000";
-const DEFAULT_ACCIDENT_FILE: &str =
-    r"C:\Users\nocdu\Desktop\dev\route\maps\전국교통사고다발지역표준데이터\사고다발_폴리곤.csv";
-const DEFAULT_GUIDE_LINE_FILE: &str =
-    r"C:\Users\nocdu\Desktop\dev\route\maps\유도선\유도선_노드.csv";
 const ENV_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../.env");
+
+/// 데이터 폴더. 환경 변수 `ROUTE_MAPS_DIR`이 있으면 그 폴더이다
+fn maps_dir() -> PathBuf {
+    std::env::var_os("ROUTE_MAPS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_MAPS_DIR))
+}
 
 /// 그래프 폴더의 파일 다섯 개로 `RouteDb`를 연다
 pub fn open_route_db(dir: &Path) -> std::io::Result<RouteDb> {
@@ -60,27 +66,40 @@ pub fn env_value(name: &str) -> Option<String> {
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let dir = Path::new(args.first().map_or(DEFAULT_GRAPH_DIR, String::as_str));
-    let addr = args.get(1).map_or(DEFAULT_ADDR, String::as_str);
-    let accident_file = Path::new(args.get(2).map_or(DEFAULT_ACCIDENT_FILE, String::as_str));
-    let guide_line_file = Path::new(args.get(3).map_or(DEFAULT_GUIDE_LINE_FILE, String::as_str));
+    let maps = maps_dir();
+    let dir = args
+        .first()
+        .map_or_else(|| maps.join("routedb"), PathBuf::from);
+    let default_addr = std::env::var("NAV_ADDR").unwrap_or_else(|_| DEFAULT_ADDR.to_string());
+    let addr = args.get(1).map_or(default_addr.as_str(), String::as_str);
+    let accident_file = args.get(2).map_or_else(
+        || {
+            maps.join("전국교통사고다발지역표준데이터")
+                .join("사고다발_폴리곤.csv")
+        },
+        PathBuf::from,
+    );
+    let guide_line_file = args.get(3).map_or_else(
+        || maps.join("유도선").join("유도선_노드.csv"),
+        PathBuf::from,
+    );
     let vworld_key = env_value("VWORLD_API_KEY").expect("VWORLD_API_KEY가 없음");
 
     let started = Instant::now();
-    let db = open_route_db(dir).expect("그래프 파일을 열지 못함");
+    let db = open_route_db(&dir).expect("그래프 파일을 열지 못함");
     println!(
         "그래프와 CCH 번들 열기, R-tree 생성 {:.1}초",
         started.elapsed().as_secs_f64()
     );
     let started = Instant::now();
-    let accidents = AccidentIndex::load(accident_file).expect("사고다발 폴리곤 파일을 읽지 못함");
+    let accidents = AccidentIndex::load(&accident_file).expect("사고다발 폴리곤 파일을 읽지 못함");
     println!(
         "사고다발 폴리곤 {}개 R-tree 생성 {:.2}초",
         accidents.len(),
         started.elapsed().as_secs_f64()
     );
 
-    let guide_lines = GuideLineTable::load(guide_line_file).expect("유도선 파일을 읽지 못함");
+    let guide_lines = GuideLineTable::load(&guide_line_file).expect("유도선 파일을 읽지 못함");
     println!("노면색깔유도선 {}행", guide_lines.len());
 
     let db = Arc::new(db);

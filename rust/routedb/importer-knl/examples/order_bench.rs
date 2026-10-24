@@ -4,21 +4,22 @@ mod coord;
 #[path = "../src/moct.rs"]
 #[allow(dead_code)]
 mod moct;
+#[path = "../src/paths.rs"]
+#[allow(dead_code)]
+mod paths;
 
 use std::collections::HashMap;
-use std::path::Path;
 use std::time::Instant;
 
 use routedb_core::graph::{Graph, NodeInput};
 use routedb_core::{dijkstra, hilbert};
 
 use coord::TmToWgs84;
-use moct::MOCT_SHPFILE_FOLDER_LOCATION;
 
 const PAIRS: usize = 300;
 
 fn main() {
-    let folder = Path::new(MOCT_SHPFILE_FOLDER_LOCATION);
+    let folder = &paths::moct_folder();
     let nodes = moct::read_nodes(folder);
     let links = moct::read_links(folder);
     let tm = TmToWgs84::new();
