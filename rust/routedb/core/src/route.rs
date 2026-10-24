@@ -153,6 +153,8 @@ pub struct TurnPoint {
 
 /// 교차로 안 짧은 링크로 보는 길이(m). 이보다 짧은 링크는 회전 방향을 정하는 데 쓰지 않는다
 pub const SHORT_LINK_M: f64 = 30.0;
+/// 교차로를 가로지르는 링크로 보는 길이(m). 이보다 짧고 앞뒤 링크의 도로명이 같은 다른 이름의 링크는 건너뛴다
+pub const CROSSING_LINK_M: f64 = 60.0;
 
 /// 방위각 a에서 b로의 변화(°)를 -180~180으로 정규화한다. 시계 방향이 양수이다.
 pub fn turn_angle(a: f64, b: f64) -> f64 {
@@ -239,7 +241,8 @@ pub fn end_bearings(points: &[(f64, f64)], span: f64) -> (f64, f64) {
 
 /// 링크 열에서 안내 지점을 찾는다.
 ///
-/// SHORT_LINK_M보다 짧은 링크는 교차로 안 링크로 보고 건너뛰며, 그 앞의 긴 링크 끝 방위각과 뒤의 긴 링크 시작 방위각으로
+/// SHORT_LINK_M보다 짧은 링크와 CROSSING_LINK_M보다 짧으면서 앞뒤 링크가 같은 도로명인 다른 이름의 링크는 교차로 안 링크로 보고
+/// 건너뛰며, 그 앞의 긴 링크 끝 방위각과 뒤의 긴 링크 시작 방위각으로
 /// 각도를 잰다. 각도가 50° 이상이거나, 20° 이상이면서 도로명이 바뀌면 안내 지점이고 위치는 앞의 긴 링크 끝이다.
 /// 도로명만 바뀌는 직진과 같은 도로명에서 50° 미만으로 꺾이는 곳은 안내하지 않는다.
 /// 본선에서 램프로 들어가는 50° 미만의 분기는 출구이고, 램프에서 본선으로 들어가는 50° 미만의 합류와
@@ -249,7 +252,14 @@ pub fn turn_points(links: &[LinkHeading]) -> Vec<TurnPoint> {
     let mut out = Vec::new();
     let mut prev: Option<usize> = None;
     for (i, l) in links.iter().enumerate() {
-        if l.length < SHORT_LINK_M && i != 0 && i != links.len() - 1 {
+        let inner = i != 0 && i != links.len() - 1;
+        // 넓은 도로가 옆길과 만나는 교차로는 길이 30m를 넘는 횡단 링크가 옆길의 이름을 갖는다.
+        // 60m 미만이고 앞뒤 링크가 같은 도로명인 다른 이름의 링크는 교차로 안 링크로 본다
+        let crossing = inner
+            && l.length < CROSSING_LINK_M
+            && links[i - 1].name == links[i + 1].name
+            && links[i - 1].name != l.name;
+        if inner && (l.length < SHORT_LINK_M || crossing) {
             continue;
         }
         if let Some(p) = prev {
@@ -999,6 +1009,19 @@ mod tests {
         // 마지막 링크는 짧아도 건너뛰지 않는다
         let tail = [link(1, 200.0, 0.0, 0.0), link(1, 10.0, 180.0, 180.0)];
         assert_eq!(turn_points(&tail)[0].turn, Turn::UTurn);
+        // 넓은 도로 1 사이에 낀 32m의 옆길 2는 교차로를 가로지르는 링크라 건너뛰어 안내가 없고, 양쪽이 다른 도로 1과 3이면 32m 링크로 안내한다
+        let crossing = [
+            link(1, 100.0, 0.0, 0.0),
+            link(2, 32.0, 313.0, 313.0),
+            link(1, 100.0, 7.0, 7.0),
+        ];
+        assert!(turn_points(&crossing).is_empty());
+        let jog = [
+            link(1, 100.0, 0.0, 0.0),
+            link(2, 32.0, 313.0, 313.0),
+            link(3, 100.0, 7.0, 7.0),
+        ];
+        assert_eq!(turn_points(&jog).len(), 2);
     }
 
     #[test]

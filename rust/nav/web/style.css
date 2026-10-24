@@ -1,0 +1,31 @@
+html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
+#map { position: absolute; inset: 0; }
+#panel {
+  position: absolute; left: 12px; top: 12px; z-index: 1; width: 340px; max-width: calc(100% - 24px);
+  max-height: calc(100% - 24px); overflow: auto; box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.95); border-radius: 8px; padding: 10px 12px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); font-size: 14px;
+}
+.row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+.field { display: flex; flex: 1; align-items: center; gap: 6px; }
+.field input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid #bbb; border-radius: 6px; font-size: 14px; }
+.badge { font-size: 12px; padding: 2px 6px; border-radius: 4px; color: #fff; white-space: nowrap; }
+.badge.from { background: #2a7de1; }
+.badge.to { background: #d9534f; }
+button, select { padding: 6px 10px; border: 1px solid #bbb; border-radius: 6px; background: #fff; font-size: 14px; }
+button:disabled { color: #999; }
+#route-button { flex: 1; background: #2a7de1; color: #fff; border-color: #2a7de1; }
+#route-button:disabled { background: #9bbde9; border-color: #9bbde9; color: #fff; }
+#results { list-style: none; margin: 0 0 6px; padding: 0; border: 1px solid #ddd; border-radius: 6px; max-height: 200px; overflow: auto; }
+#results li { padding: 6px 8px; cursor: pointer; border-bottom: 1px solid #eee; }
+#results li:last-child { border-bottom: 0; }
+#results li:hover { background: #f0f5ff; }
+#results .addr { display: block; color: #666; font-size: 12px; }
+#status { color: #333; }
+#summary { margin-top: 6px; font-weight: 600; }
+#instructions { margin: 6px 0 0; padding-left: 20px; }
+#instructions li { margin: 2px 0; }
+#instructions .dist { color: #666; font-size: 12px; margin-left: 4px; }
+.marker { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 2px rgba(0, 0, 0, 0.6); }
+.marker.from { background: #2a7de1; }
+.marker.to { background: #d9534f; }

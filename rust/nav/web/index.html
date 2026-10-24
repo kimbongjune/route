@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>route</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="map"></div>
+  <div id="panel">
+    <div class="row">
+      <label class="field">
+        <span class="badge from">출발</span>
+        <input id="from-input" type="search" placeholder="장소나 주소, 또는 지도 클릭" autocomplete="off">
+      </label>
+      <button id="from-here" type="button" title="현재 위치를 출발지로">현재 위치</button>
+    </div>
+    <div class="row">
+      <label class="field">
+        <span class="badge to">도착</span>
+        <input id="to-input" type="search" placeholder="장소나 주소, 또는 지도 클릭" autocomplete="off">
+      </label>
+    </div>
+    <ul id="results" hidden></ul>
+    <div class="row">
+      <select id="profile">
+        <option value="time">최소시간</option>
+        <option value="distance">최단거리</option>
+        <option value="free">무료도로</option>
+      </select>
+      <button id="route-button" type="button" disabled>경로</button>
+    </div>
+    <div id="status">지도를 불러오는 중</div>
+    <div id="summary" hidden></div>
+    <ol id="instructions" hidden></ol>
+  </div>
+  <script src="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

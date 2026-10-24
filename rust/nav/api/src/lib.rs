@@ -8,21 +8,27 @@ pub mod geocode;
 pub mod response;
 pub mod route;
 pub mod state;
+pub mod tiles;
 
 use axum::Router;
 use axum::http::Uri;
 use axum::routing::get;
+use tower_http::services::ServeDir;
 
 use crate::error::AppError;
 use crate::state::AppState;
 
-/// 라우터 조립
+/// 프론트 정적 파일 폴더. nav/web
+pub const WEB_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../web");
+
+/// 라우터 조립. API 경로가 아니면 nav/web의 정적 파일을 준다
 pub fn app(state: AppState) -> Router {
     Router::new()
         .merge(route::router())
         .merge(geocode::router())
+        .merge(tiles::router())
         .route("/events", get(collector::handler::events))
-        .fallback(not_found)
+        .fallback_service(ServeDir::new(WEB_DIR).fallback(get(not_found)))
         .with_state(state)
 }
 
