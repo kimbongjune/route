@@ -22,6 +22,8 @@ pub struct AppState {
     pub http: reqwest::Client,
     /// 브이월드 인증키. 배경지도 타일 프록시에 사용한다
     pub vworld_key: String,
+    /// GeoServer 주소. 자체 벡터 타일 프록시에 사용한다
+    pub geoserver_url: String,
     /// 배율 묶음을 적용 태스크로 보내는 채널
     pub updates: UpdateSender,
     /// 가중치 갱신 이벤트. `GET /events`가 구독한다

@@ -690,6 +690,36 @@ Docker Desktop(윈도우, Docker 29.4.0, Compose v5.1.2)에서 확인한 결과�
 
 남은 한계는 네 가지이다. 서울 POI의 소상공인 출처 상호는 수집 일자가 2024년 316,574건, 2025년 212,573건, 2021·2022년 1,159건으로 섞여 있어 2026-06 상가정보에 있는 "올리브영 광주선운지구점"이 없고 다음 POI 갱신 때 들어온다. 검색어의 모든 토큰이 있어야 하므로 "경부고속도로 서울요금소"는 이름에 "경부고속도로"가 없어 0건이고 "서울요금소"로 찾아야 한다. 부분 문자열은 찾지만 초성과 오타 보정은 없고 "CJ"와 "씨제이" 같은 표기 차이도 맞추지 않는다. POI 주소 문자열에는 "삼성동 131-5 철"처럼 지목이 붙은 것이 있어 그대로 보인다.
 
+## 지도 적재와 타일
+
+10단계 자체 벡터 타일을 2026-10-25에 시작하였다. `compose.yaml`에 `postgis`(postgis/postgis:16-3.4, 볼륨 `pgdata`), `geoserver`(kartoza/geoserver:2.28.2, 볼륨 `geoserver_data`, 메모리 1~4GB), 적재 배치 `loader`(ghcr.io/osgeo/gdal:ubuntu-small-3.12.4, `import` 프로파일) 세 서비스를 더하였다. 두 이미지는 PC에 이미 있었고 GDAL 이미지(491MB)는 새로 받았다. kartoza 이미지는 `/required_plugins/vectortiles-plugin.zip`을 기동 시 설치하며 GeoServer 2.28.2, GeoTools 34.2, GeoWebCache 1.28.2, `gs-vectortiles-2.28.2.jar`가 들어 있는 것을 REST `about/version`과 `WEB-INF/lib`에서 확인하였다. DB와 GeoServer 관리자 비밀번호는 `.env`의 `POSTGRES_PASSWORD`, `GEOSERVER_ADMIN_PASSWORD`이다.
+
+### 적재
+
+로컬 파이썬의 GDAL(pyogrio 3.12.4)에는 PostgreSQL 드라이버가 없고 PostGIS 이미지에는 `shp2pgsql`이 없어 GDAL 컨테이너의 `ogr2ogr`로 적재한다. `scripts/tiles/load_emap.sh`가 시도 폴더마다 건물(TL_SPBD_BULD), 도로구간(TL_SPRD_MANAGE), 실폭도로(TL_SPRD_RW), 행정경계(TL_SCCO_CTPRVN·SIG·EMD·LI)를 `emap` 스키마의 같은 테이블에 이어 넣는다. 전자지도 shp에는 prj가 없어 `-s_srs EPSG:5179`로 지정하고 타일용 `-t_srs EPSG:3857`로 변환하며, 인코딩은 `SHAPE_ENCODING CP949`, 폴리곤은 `-makevalid`와 `PROMOTE_TO_MULTI`, 복사는 `PG_USE_COPY`이고 공간 색인은 적재 뒤에 만든다. GeoServer가 요청마다 변환하는 것보다 적재 때 한 번 변환하는 쪽을 택하였다. GDAL 3.12에서 `-a_srs`와 `-t_srs`는 같이 쓸 수 없어 `-s_srs`로 하였다.
+
+서울은 59초(건물 591,225개 39초)이고 DB 412MB, 한글 필드와 SRID 3857, 유효하지 않은 폴리곤 0개를 확인하였다. 나머지 15개 시도는 904초(경기 건물 106초, 경남 81초)이며 전국 결과는 건물 10,684,220행(5,050MB), 도로구간 876,049행, 실폭도로 1,529,230행, 시군구 256, 읍면동 5,067, 리 15,161이고 DB 전체 7,893MB이다.
+
+### 발행과 타일
+
+타일에 원본 컬럼을 다 넣으면 서울역 z14 건물 타일이 423KB, z12는 12.4MB라 타일에 필요한 컬럼만 남긴 뷰 `v_buld`(이름, 지상·지하 층수, 용도코드, 지상·지하 구분), `v_road`(도로명, 위계, 폭, 광역도로구분), `v_rw`, `v_sig`, `v_emd`(코드, 이름)를 PostGIS에 만들고 `scripts/tiles/geoserver_setup.sh`가 REST API로 워크스페이스 `emap`, PostGIS 저장소, 뷰 레이어 5개, GeoWebCache 레이어(형식 `application/vnd.mapbox-vector-tile`, 격자 EPSG:900913, 메타타일 없음)를 만든다. 레이어별 줌 범위는 건물 14~18, 실폭도로 13~18, 도로구간 10~18, 읍면동 10~14, 시군구 6~12이며 범위 밖 요청은 400이다. 뷰로 바꾼 뒤 서울역 z14 건물 타일은 145KB(0.17초), 도로 20KB(0.05초)이고 서울 전체가 든 z10 도로 타일은 2.8MB(1.3초)라 낮은 줌의 도로는 11단계에서 위계로 걸러야 한다. 전국 적재 뒤 레이어 범위를 `recalculate=nativebbox,latlonbbox`로 다시 계산하였다.
+
+`nav-api`에 `GET /vtiles/{layer}/{z}/{x}/{y}`(buld, road, rw, sig, emd)를 더하여 GeoServer WMTS 타일을 같은 출처로 전달한다. GeoServer 주소는 `GEOSERVER_URL`(없으면 http://127.0.0.1:8080/geoserver, compose에서는 http://geoserver:8080/geoserver)이고 브라우저가 GeoServer에 직접 붙지 않으므로 CORS 설정이 필요 없다. 프론트는 "자체 지도" 체크박스(화면 버전 7)로 브이월드 래스터를 숨기고 배경색과 벡터 레이어 5개(임시 색)를 보이며 레이어마다 소스 하나이다. 레이어 그룹으로 한 타일에 묶는 것과 색·라벨·줌별 설계는 11단계이다.
+
+### 시딩
+
+`scripts/tiles/gwc_seed.sh`가 레이어별 줌 범위를 스레드 4개로 시딩하고 끝날 때까지 진행을 출력한다. 미리 만드는 범위는 시군구 6~12, 읍면동 10~14, 도로구간 10~14, 실폭도로 13~14, 건물 14~15이고 그 위 줌은 요청 시 만들어 캐시한다. 결과는 아래와 같다. 도로 z10~12 8,818타일은 45초였고 나머지 네 레이어를 동시에 돌린 뒤 건물 외 네 레이어는 551초 안에 끝났으며 건물은 582초 시점에 남은 시간이 약 220초였다(끝난 시각은 재지 못하였다). 캐시 전체는 2.3GB이다.
+
+| 레이어 | 줌 | 타일 수 | 캐시 |
+|---|---|---|---|
+| v_sig | 6~12 | 8,904 | 18MB |
+| v_emd | 10~14 | 137,074 | 172MB |
+| v_road | 10~14 | 137,655 | 394MB |
+| v_rw | 13~14 | 711,207 | 470MB |
+| v_buld | 14~15 | 509,455 | 1.3GB |
+
+시딩 중 GeoServer 컨테이너는 4.86GiB, PostGIS는 2.53GiB를 사용하였고 PC 여유 메모리가 5.3GB까지 내려가 함께 돌리던 로컬 `nav-api`와 테스트가 중단되었다. 운영 서버에서는 GeoServer 힙과 PostGIS `shared_buffers`를 서버 메모리에 맞춰 정할 예정이다. 화면에서 "자체 지도"를 켠 모습은 브라우저 확장이 로컬 주소를 열지 못해 확인하지 못하였다.
+
 ## 코드 규약
 
 Rust 코드는 구글 Rust 스타일 가이드를 따른다. `rust/rustfmt.toml`에 `max_width = 100`을 두고 `cargo fmt`로 형식을 맞추며, 다른 모듈의 함수는 `hierarchy::edges_of_node_path`처럼 모듈명을 붙여 호출하고 타입은 `use`로 가져와 모듈명 없이 사용한다. 함수 인자와 반환값의 튜플은 `NodeInput`, `TollInput`, `PoiInput`처럼 이름 있는 필드의 구조체로 두었고 위경도 쌍 `(f64, f64)`만 튜플로 남겼다. 실패할 수 있는 `unwrap`은 이유를 적은 `expect`로 바꾸었고, `lg`, `cch_v` 같은 줄임 변수명은 `line_graph`, `cch_view`로 풀었으며, 입력 구조체에는 `Clone`, `Debug`, `PartialEq`를 `derive`하였다.
@@ -875,12 +905,17 @@ cargo run --release -p nav-api
 docker compose up -d
 docker compose run --rm importer
 docker compose run --rm importer importer-geocode
+docker compose run --rm loader 서울특별시
+docker compose run --rm loader
+bash scripts/tiles/geoserver_setup.sh
+bash scripts/tiles/gwc_seed.sh
 docker compose down
 curl -X POST http://127.0.0.1:3000/route -H "Content-Type: application/json" -d '{"from":{"lat":37.5547,"lon":126.9707},"to":{"lat":37.4979,"lon":127.0276},"profile":"time"}'
 # Windows cmd는 작은따옴표를 인식하지 않으므로 큰따옴표를 이스케이프한다
 curl -X POST http://127.0.0.1:3000/route -H "Content-Type: application/json" -d "{\"from\":{\"lat\":37.5547,\"lon\":126.9707},\"to\":{\"lat\":37.4979,\"lon\":127.0276},\"profile\":\"time\"}"
 curl "http://127.0.0.1:3000/geocode?q=서울역&size=3&lat=37.5665&lon=126.978"
 curl "http://127.0.0.1:3000/reverse?lat=37.5666&lon=126.9784"
+curl -o tile.pbf "http://127.0.0.1:3000/vtiles/buld/14/13972/6346"
 python -X utf8 scripts/geocode/compare_vworld.py
 python -X utf8 scripts/nodelink/turninfo_check.py
 python -X utf8 scripts/nodelink/uturn_rule_check.py

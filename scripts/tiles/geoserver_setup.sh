@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# GeoServer에 emap 워크스페이스, PostGIS 저장소, 뷰 레이어(v_buld, v_road, v_rw, v_sig, v_emd), 벡터 타일(GeoWebCache) 설정을 REST API로 만든다.
+# 이미 있는 항목은 POST가 실패하므로(409 등) 다시 실행해도 된다. 비밀번호는 .env에서 읽는다.
+#   bash scripts/tiles/geoserver_setup.sh
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+GS=http://127.0.0.1:8080/geoserver
+PW=$(grep '^GEOSERVER_ADMIN_PASSWORD=' .env | cut -d= -f2-)
+PGPW=$(grep '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)
+# 레이어 이름:줌 시작:줌 끝. 건물은 14부터, 실폭도로는 13부터, 도로구간은 10부터, 시군구는 6~12, 읍면동은 10~14
+LAYERS="v_buld:14:18 v_road:10:18 v_rw:13:18 v_sig:6:12 v_emd:10:14"
+
+req() { # 메서드 URL 콘텐츠타입 본문
+  code=$(curl -s -o /tmp/gs_body -w "%{http_code}" -u "admin:$PW" -X "$1" -H "Content-Type: $3" "$2" -d "$4")
+  echo "$1 ${2#"$GS"/} -> $code"
+}
+
+req POST "$GS/rest/workspaces" application/json '{"workspace":{"name":"emap"}}'
+
+req POST "$GS/rest/workspaces/emap/datastores" application/json "{\"dataStore\":{\"name\":\"postgis\",\"connectionParameters\":{\"entry\":[
+  {\"@key\":\"dbtype\",\"\$\":\"postgis\"},{\"@key\":\"host\",\"\$\":\"postgis\"},{\"@key\":\"port\",\"\$\":\"5432\"},
+  {\"@key\":\"database\",\"\$\":\"route\"},{\"@key\":\"schema\",\"\$\":\"emap\"},{\"@key\":\"user\",\"\$\":\"route\"},
+  {\"@key\":\"passwd\",\"\$\":\"$PGPW\"},{\"@key\":\"Expose primary keys\",\"\$\":\"false\"},{\"@key\":\"max connections\",\"\$\":\"20\"}]}}}"
+
+for spec in $LAYERS; do
+  IFS=: read -r t z0 z1 <<< "$spec"
+  req POST "$GS/rest/workspaces/emap/datastores/postgis/featuretypes" application/json \
+    "{\"featureType\":{\"name\":\"$t\",\"nativeName\":\"$t\",\"srs\":\"EPSG:3857\",\"enabled\":true}}"
+done
+
+# GWC 레이어: 벡터 타일 형식, 웹 메르카토르 격자, 레이어별 줌 범위, 메타타일 없음
+for spec in $LAYERS; do
+  IFS=: read -r t z0 z1 <<< "$spec"
+  req PUT "$GS/gwc/rest/layers/emap:$t.xml" application/xml \
+    "<GeoServerLayer><name>emap:$t</name><enabled>true</enabled>
+     <mimeFormats><string>application/vnd.mapbox-vector-tile</string></mimeFormats>
+     <gridSubsets><gridSubset><gridSetName>EPSG:900913</gridSetName><zoomStart>$z0</zoomStart><zoomStop>$z1</zoomStop></gridSubset></gridSubsets>
+     <metaWidthHeight><int>1</int><int>1</int></metaWidthHeight><expireCache>0</expireCache><expireClients>0</expireClients><gutter>0</gutter>
+     </GeoServerLayer>"
+done
