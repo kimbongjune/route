@@ -25,6 +25,13 @@ rust/
     poi.rs                  카메라_링크.csv, 과속방지턱_링크.csv 읽기
     coord.rs                TM에서 WGS84 변환
     paths.rs                데이터 파일 위치. ROUTE_MAPS_DIR 아래 입력 파일과 출력 폴더
+  routedb/geocode/src/
+    lib.rs                  지오코더 크레이트. 색인 파일 형식과 검색
+    text.rs                 이름·검색어 정규화, 2-gram 키, 거리
+    index.rs                Builder(색인 생성과 저장), GeocodeIndex(mmap 열기와 배열 접근)
+    search.rs               주소 해석, 2-gram 장소 검색, 결과 순서, 역지오코딩
+  routedb/geocode/src/bin/
+    importer-geocode.rs     전자지도와 POI를 읽어 geocode.idx 생성
   routedb/importer-knl/examples/
     order_bench.rs          shp 순서와 힐베르트 순서의 탐색 시간 비교
     astar_bench.rs          다익스트라와 A*의 결과와 탐색 시간 비교
@@ -34,7 +41,7 @@ rust/
   nav/api/src/
     main.rs                 그래프 파일을 열어 AppState를 만들고 서버 실행
     lib.rs                  라우터 조립 app(). main.rs와 통합 테스트가 같이 사용
-    state.rs                AppState. Arc<RouteDb>
+    state.rs                AppState. Arc<RouteDb>, Arc<GeocodeIndex>
     response.rs             ApiResponse. 모든 응답의 공통 구조
     error.rs                AppError. 상태 코드와 결과 코드가 있는 실패 응답으로 변환
     extract.rs              ApiJson, ApiQuery. 본문·쿼리 해석 실패를 400 응답으로 변환
@@ -44,9 +51,9 @@ rust/
     route/service.rs        요청 검증, 블로킹 스레드에서 RouteDb 호출, 사고다발 구간·안내문·경고 생성
     route/guidance.rs       안내 지점의 안내문과 경로 위 경고 문장
     geocode/mod.rs          지오코딩 기능의 라우트 모음
-    geocode/model.rs        검색 요청·응답 타입
-    geocode/handler.rs      검색어를 받아 service 호출
-    geocode/service.rs      브이월드 검색 API 호출과 응답 변환
+    geocode/model.rs        검색·역지오코딩 요청과 응답 타입
+    geocode/handler.rs      검색어·좌표를 받아 service 호출
+    geocode/service.rs      검색어 검증, 색인 검색, 응답 변환
     collector/mod.rs        배율 묶음을 받아 update_weights를 호출하는 적용 태스크, SSE 이벤트 타입
     collector/handler.rs    GET /events SSE
     collector/traffic.rs    교통소통정보 타일 폴링, 속도 배율 변환
@@ -62,7 +69,7 @@ rust/
     accident/index.rs       사고다발 폴리곤 R-tree, 경로 좌표 열과의 교차
   nav/api/tests/
     route_api.rs            서버 없이 라우터에 요청을 보내는 통합 테스트
-    geocode_api.rs          .env의 키로 브이월드를 실제로 호출하는 통합 테스트
+    geocode_api.rs          작은 색인 파일을 만들어 service를 호출하는 통합 테스트
 ```
 
 ## 크레이트
@@ -73,6 +80,7 @@ rust/
 | `proj4rs` 0.2 | EPSG:5186에서 WGS84 변환 | 순수 Rust 구현이라 추가 설치 없이 빌드되며 `proj` 크레이트는 C 라이브러리 PROJ 설치가 필요하다 |
 | `bytemuck` 1.25 | 배열과 바이트 상호 변환 | 배열을 복사 없이 바이트로 기록하고 mmap 바이트를 다시 배열로 변환한다 |
 | `memmap2` 0.9 | 그래프 파일 mmap | 파일을 읽지 않고 메모리에 연결만 하므로 295MB 파일을 5ms에 연다 |
+| `calamine` 0.37 | POI 별칭 xlsx 읽기 | 순수 Rust라 추가 설치 없이 xlsx를 읽는다 |
 | `rstar` 0.13 | 링크 선분 R-tree | 순수 Rust 구현이며 선분처럼 직접 정의한 도형을 넣을 수 있고 `bulk_load`로 1,023만 개를 4.6초에 만든다 |
 | `serde` 1.0, `serde_json` 1.0 | Route 타입의 JSON 직렬화 | `Route`, `Step`, `RoutePoi` 등에 `Serialize`를 derive하여 별도 변환 코드 없이 응답을 만든다 |
 | `csv` 1.4 | 사고다발_폴리곤.csv 읽기 | serde로 행을 구조체에 바로 넣는다 |
@@ -628,7 +636,7 @@ metric은 `Metrics`가 프로파일 3개의 `Arc<MetricSource>`로 갖고 있으
 
 컨테이너 안에서 데이터 위치를 정할 수 있도록 윈도우 절대 경로 상수를 환경 변수로 수정하였다. 임포터는 `paths.rs`가 `ROUTE_MAPS_DIR`(없으면 저장소의 `maps`) 아래에서 표준노드링크 폴더, 요금지점·카메라·방지턱 CSV, 출력 폴더 `routedb`를 정하고, `nav-api`는 같은 변수로 그래프 폴더, 사고다발 폴리곤, 유도선 CSV의 기본 위치를 정하며 인자가 있으면 인자를 우선한다. 바인드 주소는 `NAV_ADDR`(없으면 127.0.0.1:3000), 정적 파일 폴더는 `NAV_WEB_DIR`(없으면 저장소의 `nav/web`)이다. 인증키는 전처럼 환경 변수 또는 `.env`에서 읽는다.
 
-`compose.yaml`은 `api`와 `importer` 두 서비스이다. `api`는 `./maps`를 `/maps`에 읽기 전용으로 마운트하고 `.env`를 `env_file`로 넣어 `VWORLD_API_KEY`, `ITS_API_KEY`, 폴링 간격이 환경 변수로 들어가며, 3000 포트를 열고 메모리 상한 4GB, `restart: unless-stopped`이다. `importer`는 `import` 프로파일이라 `docker compose up`에는 들어가지 않고 `docker compose run --rm importer`로 실행하며 `./maps`를 읽기·쓰기로 마운트하여 `/maps/routedb`에 결과를 쓴다. routedb 파일 673MB는 이미지에 넣지 않고 볼륨으로 공유하며 갱신은 임포터 실행과 `api` 재시작이다. postgis와 geoserver는 2차에 더한다.
+`compose.yaml`은 `api`와 `importer` 두 서비스이다. `api`는 `./maps`를 `/maps`에 읽기 전용으로 마운트하고 `.env`를 `env_file`로 넣어 `VWORLD_API_KEY`, `ITS_API_KEY`, 폴링 간격이 환경 변수로 들어가며, 3000 포트를 열고 메모리 상한 4GB, `restart: unless-stopped`이다. `importer`는 `import` 프로파일이라 `docker compose up`에는 들어가지 않고 `docker compose run --rm importer`로 실행하며 `./maps`를 읽기·쓰기로 마운트하여 `/maps/routedb`에 결과를 저장한다. routedb 파일 673MB는 이미지에 넣지 않고 볼륨으로 공유하며 갱신은 임포터 실행과 `api` 재시작이다. postgis와 geoserver는 2차에 더한다.
 
 Docker Desktop(윈도우, Docker 29.4.0, Compose v5.1.2)에서 확인한 결과는 아래와 같다. `api` 컨테이너의 첫 요청은 바인드 마운트한 그래프 파일을 mmap으로 읽어 들이느라 느리고 두 번째부터는 로컬과 같다.
 
@@ -642,6 +650,45 @@ Docker Desktop(윈도우, Docker 29.4.0, Compose v5.1.2)에서 확인한 결과�
 | `importer` 실행 | 1분 12초~1분 22초(CCH 28.5초) |
 
 컨테이너(리눅스)에서 만든 그래프 파일은 윈도우에서 만든 것과 통행 수가 1개 다르다. 윈도우는 통행 1,583,618개에 뺀 U턴 통행 345,455개, 리눅스는 1,583,617개에 345,456개이며 리눅스에서 두 번 실행한 결과는 바이트까지 같았다. 노드, 간선, 링크 좌표, 경유 링크, 영업소, 지점, 도로명, 교차로 이름 수는 같다. U턴 판정이 좌표로 계산한 각도 비교이므로 두 플랫폼 수학 라이브러리의 마지막 자리 차이로 경계값 하나가 뒤집힌 것으로 보이며, 이 때문에 CCH 간선도 7,754,138개와 7,749,595개로 다르다. 어느 통행인지는 확인하지 않았다. 배포하는 그래프 파일은 한 플랫폼에서 만든 것을 사용하며 이 문서의 수치는 윈도우 기준이다.
+
+## 지오코더
+
+17단계 지오코더를 `rust/routedb/geocode` 크레이트(`routedb-geocode`)로 구현하였다. 03 routedb 기획에 주소 검색이 routedb 한국 확장 항목으로 있어 routedb 아래에 두었으며, 라이브러리가 색인 파일 형식과 검색을 맡고 같은 크레이트의 실행 파일 `importer-geocode`가 원본을 읽어 색인을 만든다. `nav-api`는 기동 시 그래프 폴더의 `geocode.idx`를 mmap으로 열어 `GET /geocode`와 새로 더한 `GET /reverse`를 처리하며 브이월드 검색 API 호출 코드는 제거하였다. 브이월드 인증키는 배경지도 타일 프록시에만 남는다.
+
+### 원본과 범위
+
+주소 검색 원본은 도로명주소 전자지도의 건물(TL_SPBD_BULD), 출입구(TL_SPBD_ENTRC), 도로구간(TL_SPRD_MANAGE), 행정경계(TL_SCCO_CTPRVN·SIG·EMD·LI)이고 장소 검색 원본은 국가관심지점정보 POI의 TN_POI(명칭, 분류코드, 점), TN_ADRES(도로명·지번 주소 문자열), TN_ALIAS(별칭 xlsx)이다. 체크리스트 0단계에 기록한 대로 두 데이터 모두 EPSG:5179이며 전자지도는 shp 옆에 prj가 없고 시도 폴더의 `GRS80_UTMK.prj`만 있어 임포터가 좌표계를 지정한다. 전자지도 dbf는 cpg 파일이 없어 CP949로 지정하여 읽고, POI dbf의 `.CPG`는 CP949이지만 리눅스에서는 확장자 대소문자가 달라 찾지 못할 수 있으므로 같은 방식으로 지정한다. 5179→WGS84 변환은 브이월드 검색 결과와 대조하여 서울특별시청(37.566610, 126.978388)과 국회의사당(37.530284, 126.915421)이 소수 6자리까지 같은 것을 확인하였다. 소상공인시장진흥공단 상가정보는 POI의 출처(전남광주 758,100건 중 171,828건)로 이미 들어 있어 넣지 않았다.
+
+전국 전자지도 건물 10,684,220개를 (도로명 관리 시군구, 도로명코드, 지하 여부, 건물본번, 건물부번)이 같은 것끼리 묶어 주소 6,412,939개로 만들었다. 같은 도로명주소에 건물이 여럿인 경우(서울 26,219주소에 94,920건물. 아파트 단지 등)를 주소 하나로 보이기 위해서이다. 주소의 좌표는 주건물(BUL_DPN_SE M)의 주출입구, 주건물 폴리곤의 무게중심, 종속건물의 출입구, 종속건물의 중심 순으로 정하며 서울은 건물의 84%(496,350/591,225)에 주출입구가 있다. 건물명은 묶음에서 처음 나오는 건축물대장 건물명(BULD_NM)이고 서울 건물의 22%(132,852)에만 있다. 도로명은 건물의 RDS_SIG_CD(없으면 SIG_CD)와 RN_CD로 도로구간을 찾으며 전국에서 187개 건물이 조인되지 않아 뺐다. 도로명은 (시군구, 도로명코드)로 중복을 제거하여 173,686개이다.
+
+### 색인 파일
+
+`geocode.idx`는 그래프 파일과 같은 방식으로 헤더 뒤에 배열을 정해진 순서로 기록하고 mmap으로 열어 복사 없이 읽는다. 헤더는 MAGIC `GEOCODE\0`, VERSION 1, 빈칸 4바이트, u64 개수 16개(장소 수, 장소 이름 바이트 수, 장소 주소 바이트 수, 별칭 수, 별칭 바이트 수, 2-gram 키 수, 목록 수, 시도·시군구·읍면동·리 수, 행정구역 이름 바이트 수, 도로명 수, 도로명 바이트 수, 주소 수, 건물명 바이트 수)로 144바이트이다. 배열은 8바이트(장소 분류코드, 행정구역 코드), 4바이트(장소 위경도, 이름·주소·별칭 시작 위치, 2-gram 키와 목록 시작 위치, 장소 번호 목록, 행정구역 이름 시작 위치, 도로명의 시군구·도로명코드·이름 시작 위치, 정규화한 이름 순의 도로명 번호, 주소의 도로명 번호·위경도·읍면동·리·본번·부번·지번 본번·부번·건물명 시작 위치, 지번 순의 주소 번호), 1바이트(지하 여부, 산 여부, 문자열 바이트 열 6개) 순으로 35개이다. 위경도는 10^6을 곱한 i32라 0.1m 단위이다. 주소 배열은 (도로명, 지하, 본번, 부번) 순으로 정렬되어 이분 탐색으로 찾고 지번 순 배열은 (읍면동, 산, 본번, 부번, 리) 순이다. 파일 크기는 1,619,460,173바이트(1.62GB)이며 장소 9,813,303, 별칭 4,733,996, 2-gram 키 416,221, 목록 항목 65,150,221이다.
+
+### 검색
+
+이름과 검색어는 소문자로 바꾸고 공백·괄호·가운뎃점·쉼표·밑줄·따옴표를 뺀 글자열로 정규화한다. 장소 색인은 정규화한 이름과 별칭의 이어지는 두 글자(2-gram)마다 그 글자 쌍이 든 장소 번호 목록을 정렬해 저장한 것이다. 처음에는 이름을 띄어쓰기로 나눈 토큰의 앞부분 일치로 하려 하였으나 POI 이름 9,813,303개 중 8,588,756개(88%)가 "씨제이올리브영남악신도시점"처럼 띄어쓰기 없는 한 토큰이라 앞부분 일치로는 "올리브영 남악"을 찾지 못하므로 2-gram 색인으로 정하였다. 검색어를 띄어쓰기로 나눈 토큰마다 2-gram 키를 만들어 목록을 모두 교집합한 뒤 후보마다 이름 또는 별칭에 모든 토큰이 이어서 들어 있는지 확인한다. 점수는 이름이 검색어(공백 제거)와 같음 0, 검색어로 시작 1, 검색어를 포함 2, 토큰이 따로따로 포함 3이고 별칭 일치는 1 또는 3이다. 같은 점수는 분류 순위(지명, 철도·공항과 기관명, 관광·도서관·문화재·박물관·스포츠시설, 건물, 그 밖의 시설, 상호, 진출입시설 순) 뒤에 지도 중심이 있으면 가까운 순, 없으면 이름이 짧은 순이다. 분류 순위를 거리보다 앞에 정한 것은 "경복궁"처럼 문화재와 같은 이름의 식당이 있을 때 가까운 식당이 먼저 나오지 않게 하기 위해서이다.
+
+주소는 토큰 열에서 "이름 번호" 꼴을 찾아 해석한다. 번호는 "110", "110-5", "산12-3", "656번지"이고 "세종대로110"처럼 띄어쓰기 없이 이은 것은 나누며 "산 12"처럼 띄어 쓴 산은 번호와 합친다. 이름이 정규화한 도로명과 같으면 그 도로명의 (지하 여부, 본번, 부번) 주소를, 읍면동 또는 리 이름과 같으면 그 구역의 지번 주소를 찾는다. 이름 앞의 토큰은 시도·시군구 필터로 사용하며 "서울"처럼 이름의 앞부분, "의창구"처럼 "창원시 의창구"의 한 부분, "경남"처럼 첫 글자와 셋째 글자를 딴 줄임말, "광주"처럼 전남광주통합특별시 안에 든 토큰이 맞는 것으로 보고 토큰끼리는 교집합이다. 필터와 표시의 시군구는 도로명의 관리 시군구가 아니라 건물이 있는 읍면동 코드의 시군구인데, 창원시 중앙대로처럼 한 도로가 두 구에 걸쳐도 관리 시군구는 하나이기 때문이다. 결과의 도로명주소는 "충청남도 홍성군 홍북읍 충남대로 21"처럼 읍·면은 넣고 동은 넣지 않으며 세종처럼 시도명과 시군구명이 같으면 한 번만 넣는다. 지번주소에는 리와 산, 건물명을 괄호로 더한다. 응답은 주소 결과를 앞에, 장소 결과를 뒤에 두고 `total`은 둘의 합이며 항목마다 `kind`가 address 또는 place이다. `GET /geocode`는 `q`, `size`(기본 10, 최대 100)에 지도 중심 `lat`·`lon`을 선택으로 받고 프론트는 검색마다 지도 중심을 보낸다. `GET /reverse?lat&lon`은 반경 300m 안에서 가장 가까운 주소를 돌려주고 없으면 404 ADDRESS_NOT_FOUND이며, 프론트는 지도 클릭과 마커 끌기로 정한 지점의 이름을 좌표 대신 이 주소로 바꾼다. 역지오코딩은 주소 6,412,939개의 좌표를 모두 훑는 방식이다.
+
+### 결과
+
+임포터는 전자지도 16개 시도의 행정구역 0.1초, 도로명 3.2초, 건물·출입구 57.0초, POI 16개 시도 43.4초, 정렬·2-gram 색인·저장 6.6초로 전체 110.3초이다. 로컬 서버에서 측정한 검색 시간은 아래와 같다. 첫 요청은 mmap 페이지를 읽어 들이느라 느리고 "서울"이나 "아파트"처럼 후보가 많은 검색어는 후보마다 이름을 확인하므로 오래 걸린다.
+
+| 검색어 | 전체 건수 | 첫 요청 | 두 번째 |
+|---|---|---|---|
+| 서울역 | 494 | 28ms | 13ms |
+| 세종대로 110 | 1 | 1ms | 1ms |
+| 여의도동 1 | 15 | 3ms | 23ms |
+| 서울 | 52,442 | 67ms | 16ms |
+| 아파트 | 273,851 | 125ms | 83ms |
+| 역지오코딩 세종대로 110 | 1 | 27ms | 10ms |
+
+서버 작업 집합은 색인을 열고 검색 40건을 처리한 뒤 1.69GB(지오코더 전 1.45GiB)이다. 도커는 `importer` 이미지에 `importer-geocode`를 더해 119MB이고 `docker compose run --rm importer importer-geocode`로 색인을 만들며, `api` 컨테이너는 `compose up` 뒤 5.6초에 첫 응답, 메모리 1.43GiB이고 바인드 마운트한 색인의 첫 "아파트" 검색은 1,271ms, 두 번째는 118ms이다.
+
+브이월드와의 비교는 `scripts/geocode/compare_vworld.py`로 주소 20개, 장소 20개의 첫 결과 거리를 구하였다(2026-10-25. 브이월드 결과는 저장하지 않는다). 주소는 로컬 20건 모두 결과가 있고 브이월드는 지번 2건을 ROAD 유형으로 찾지 못해 18건이며, 둘 다 있는 18건 중 50m 안 7건, 200m 안 15건, 1km 넘게 다른 것은 없다. 가장 먼 인천광역시청 332m는 브이월드가 건물 중심, 로컬이 출입구를 주기 때문이다. 장소는 20건 모두 양쪽에 결과가 있고 50m 안 10건, 200m 안 11건, 1km 넘게 다른 것은 3건이다. 인천국제공항과 대전역은 브이월드의 첫 결과가 버스 노선 "덕소-인천국제공항"과 13km 떨어진 다른 대전역이고, 불국사는 같은 이름의 절이 전국에 여럿이라 로컬이 서울 강남의 불국사를 먼저 주었으며 경주 불국사를 앞세울 인기도 자료가 없다. 로컬 평균 응답은 주소 19.0ms, 장소 10.1ms이다.
+
+남은 한계는 네 가지이다. 서울 POI의 소상공인 출처 상호는 수집 일자가 2024년 316,574건, 2025년 212,573건, 2021·2022년 1,159건으로 섞여 있어 2026-06 상가정보에 있는 "올리브영 광주선운지구점"이 없고 다음 POI 갱신 때 들어온다. 검색어의 모든 토큰이 있어야 하므로 "경부고속도로 서울요금소"는 이름에 "경부고속도로"가 없어 0건이고 "서울요금소"로 찾아야 한다. 부분 문자열은 찾지만 초성과 오타 보정은 없고 "CJ"와 "씨제이" 같은 표기 차이도 맞추지 않는다. POI 주소 문자열에는 "삼성동 131-5 철"처럼 지목이 붙은 것이 있어 그대로 보인다.
 
 ## 코드 규약
 
@@ -756,7 +803,7 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 
 ## 테스트
 
-`cargo test --workspace`로 54개를 실행한다. `geocode_api`는 `.env`의 키로 브이월드를 실제로 호출하며 키가 없으면 건너뛴다. `route_api`는 전국 그래프 파일을 열어 라우터에 요청을 보내므로 debug 빌드에서는 R-tree 생성에 129초가 소요되고 `cargo test --release -p nav-api`로는 3초이다.
+`cargo test --workspace`로 61개를 실행한다. `geocode_api`는 임시 폴더에 작은 색인 파일을 만들어 service를 호출한다. `route_api`는 전국 그래프 파일을 열어 라우터에 요청을 보내므로 debug 빌드에서는 R-tree 생성에 129초가 소요되고 `cargo test --release -p nav-api`로는 3초이다.
 
 | 파일 | 테스트 | 확인 내용 |
 |---|---|---|
@@ -794,8 +841,14 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 | `nav/api` `guideline/mod.rs` | `normalize_and_route`, `pick_color` | 신갈JC(북측)→신갈JC와 JCT→JC, 경부선과 경부고속도로 일치, 경부선 행의 오른쪽 색 분홍색·왼쪽 색 녹색, 오른쪽 색이 없으면 왼쪽 색, 색이 다른 행은 없음, 출구가 아니면 없음 |
 | `nav/api` `route/guidance.rs` | `intersection_names`, `step_texts`, `camera_labels` | 남영역앞교차로·신갈JC(북측)·반포IC는 교차로 이름이고 하월곡동 26-14·야당동1040은 지번, 좌회전·1시 방향·오른쪽 출구 방면·유턴 문장, 단속구분 1·2·3·4·16의 카메라 문구 |
 | `nav/api` `accident/index.rs` | `sections_along_route`, `parse_ring_rejects_bad_text` | 겹치는 정사각형 두 개가 한 구간이고 경계에 닿는 선분까지 0~500m, 떨어진 정사각형은 600~1,000m, 밖을 지나면 없음, 점 3개 미만과 숫자 아닌 좌표는 에러 |
-| `nav/api` `geocode/service.rs` | `parse_place_and_not_found` | 브이월드 PLACE 응답의 서울역 한 건 변환과 좌표 없는 건 제외, NOT_FOUND는 빈 목록, ERROR는 502 |
-| `nav/api` `tests/geocode_api.rs` | `geocode_requests` | 서울역 장소 검색의 첫 결과와 좌표 범위, 한강대로 405 주소 검색, 없는 장소는 빈 목록, 빈 검색어는 400 |
+| `geocode` `text.rs` | `normalize_and_keys`, `distance` | 소문자·공백·괄호 정규화, 서울역의 2-gram 키 두 개, 한 글자는 키 없음, 부분 문자열 포함, 서울역·시청 거리 1.4~1.6km |
+| `geocode` `index.rs` | `write_and_open` | 저장 후 다시 열면 장소·별칭·주소 수, 이름·별칭·좌표·분류코드, "서울"과 "시청" 키의 장소 목록, 주소 정렬 순서, 이름 순 도로명, 지번 순 주소 |
+| `geocode` `search.rs` | `numbers_and_tokens` | 110-5·산12·656번지 해석, 12층과 -5는 번호 아님, 세종대로110-5와 역삼동123 나누기, 3호선은 그대로, "산 1-2" 합치기 |
+| `geocode` `search.rs` | `address_search` | 서울 중구 세종대로 110의 도로명·지번 주소와 건물명, 용산구로 거르면 없음, 110-5 부번, 동자동 43-205 지번 |
+| `geocode` `search.rs` | `place_search` | 서울역 정확 일치가 포함 결과보다 앞, 떨어진 토큰 "올리브영 서울역", 별칭 "시청", 지도 중심에 따른 순서, 없는 2-gram은 빈 결과, limit과 total |
+| `geocode` `search.rs` | `region_parts_and_display` | "의창구"로 두 구에 걸친 중앙대로 300 거르기, 세종 시도명 한 번, 홍북읍 표기와 리 지번, 경복궁 문화재가 가까운 식당보다 앞, 분류 순위, 경남·광주 줄임말 |
+| `geocode` `search.rs` | `reverse` | 시청 옆 좌표의 가장 가까운 주소, 바다는 없음 |
+| `nav/api` `tests/geocode_api.rs` | `geocode_requests` | 서울역 장소 검색의 종류와 주소, 세종대로 110 주소 검색, 지도 중심에 따른 순서, 없는 장소는 빈 목록, 빈 검색어와 좌표 하나만 있는 요청은 400, 역지오코딩과 404, 좌표 범위 400 |
 | `nav/api` `tests/route_api.rs` | `heading_picks_start_direction` | 청파로에서 방위각 180°·0°의 출발 간선 방위각이 각각 90° 안이고 첫 링크가 다름, 방위각 400은 400 BAD_REQUEST |
 | `nav/api` `tests/route_api.rs` | `update_channel_applies_and_broadcasts` | 채널로 보낸 전면 통제 묶음이 적용되어 순번 1 이벤트가 오고 경로가 그 링크를 피함, 돌발 배율 되돌리기 뒤 순번 2 `reset` 이벤트와 처음 경로 복귀 |
 | `nav/api` `tests/route_api.rs` | `weight_updates_change_route` | 가운데 링크 전면 통제 뒤 경로가 그 링크를 피함, 속도 배율 2 뒤 시간 증가와 거리 경로 불변, 되돌리면 처음과 같음 |
@@ -806,8 +859,9 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 
 ```
 cd rust
-cargo build --release -p importer-knl
+cargo build --release -p importer-knl -p routedb-geocode
 ./target/release/importer-knl.exe
+./target/release/importer-geocode.exe
 cargo test --workspace
 cargo run -p routedb-core --example csr_demo
 cargo run -p routedb-core --example hilbert_demo
@@ -820,11 +874,14 @@ cargo run --release -p importer-knl --example cch_bench
 cargo run --release -p nav-api
 docker compose up -d
 docker compose run --rm importer
+docker compose run --rm importer importer-geocode
 docker compose down
 curl -X POST http://127.0.0.1:3000/route -H "Content-Type: application/json" -d '{"from":{"lat":37.5547,"lon":126.9707},"to":{"lat":37.4979,"lon":127.0276},"profile":"time"}'
 # Windows cmd는 작은따옴표를 인식하지 않으므로 큰따옴표를 이스케이프한다
 curl -X POST http://127.0.0.1:3000/route -H "Content-Type: application/json" -d "{\"from\":{\"lat\":37.5547,\"lon\":126.9707},\"to\":{\"lat\":37.4979,\"lon\":127.0276},\"profile\":\"time\"}"
-curl "http://127.0.0.1:3000/geocode?q=서울역&size=3"
+curl "http://127.0.0.1:3000/geocode?q=서울역&size=3&lat=37.5665&lon=126.978"
+curl "http://127.0.0.1:3000/reverse?lat=37.5666&lon=126.9784"
+python -X utf8 scripts/geocode/compare_vworld.py
 python -X utf8 scripts/nodelink/turninfo_check.py
 python -X utf8 scripts/nodelink/uturn_rule_check.py
 python -X utf8 scripts/nodelink/kakao_route_compare.py

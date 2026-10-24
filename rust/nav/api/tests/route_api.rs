@@ -13,6 +13,7 @@ use nav_api::collector::{self, Batch};
 use nav_api::guideline::GuideLineTable;
 use nav_api::state::AppState;
 use routedb_core::route::{RouteDb, WeightUpdate};
+use routedb_geocode::GeocodeIndex;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tower::ServiceExt;
@@ -55,6 +56,9 @@ fn app_with_state() -> (Router, Arc<RouteDb>, AppState) {
         accidents: Arc::new(accidents),
         guide_lines: Arc::new(
             GuideLineTable::load(Path::new(GUIDE_LINE_FILE)).expect("유도선 파일을 읽지 못함"),
+        ),
+        geocoder: Arc::new(
+            GeocodeIndex::open(&dir.join("geocode.idx")).expect("지오코더 색인을 열지 못함"),
         ),
         http: reqwest::Client::new(),
         vworld_key: String::new(),

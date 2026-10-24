@@ -12,6 +12,8 @@ pub enum AppError {
     RouteNotFound,
     /// 없는 주소. 404 NOT_FOUND
     NotFound(String),
+    /// 역지오코딩 반경 안에 주소 없음. 404 ADDRESS_NOT_FOUND
+    AddressNotFound,
     /// 브이월드 같은 바깥 서비스 호출 실패. 502 UPSTREAM_ERROR
     Upstream(String),
 }
@@ -30,6 +32,11 @@ impl AppError {
                 StatusCode::NOT_FOUND,
                 "NOT_FOUND",
                 format!("없는 주소: {path}"),
+            ),
+            AppError::AddressNotFound => (
+                StatusCode::NOT_FOUND,
+                "ADDRESS_NOT_FOUND",
+                "주변에 주소 없음".to_string(),
             ),
             AppError::Upstream(message) => (StatusCode::BAD_GATEWAY, "UPSTREAM_ERROR", message),
         }

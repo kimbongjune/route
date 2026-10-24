@@ -1,10 +1,10 @@
 //! 내비 API 서버. 그래프 파일을 열어 `AppState`를 만들고 lib.rs의 `app`으로 라우터를 조립한다.
 //!
 //! cargo run --release -p nav-api -- [그래프 폴더] [주소] [사고다발 폴리곤 CSV] [유도선 CSV]
-//! 그래프 폴더는 moct.rdb, moct.cch-struct, moct.cch-metric, moct.cch-metric-time, moct.cch-metric-free가 있는 폴더이다.
+//! 그래프 폴더는 moct.rdb, moct.cch-struct, moct.cch-metric, moct.cch-metric-time, moct.cch-metric-free와 지오코더 색인 geocode.idx가 있는 폴더이다.
 //! 인자가 없으면 데이터 폴더(환경 변수 ROUTE_MAPS_DIR, 없으면 저장소의 maps) 아래의 기본 위치이고 주소는 NAV_ADDR, 없으면 127.0.0.1:3000이다.
 //! 정적 파일 폴더는 NAV_WEB_DIR, 없으면 저장소의 nav/web이다.
-//! 브이월드 인증키는 환경 변수 VWORLD_API_KEY 또는 저장소 루트 .env의 VWORLD_API_KEY에서 읽는다.
+//! 배경지도 타일용 브이월드 인증키는 환경 변수 VWORLD_API_KEY 또는 저장소 루트 .env의 VWORLD_API_KEY에서 읽는다.
 //! 국가교통정보센터 인증키 ITS_API_KEY와 폴링 간격 TRAFFIC_POLL_SECS가 모두 있을 때만 소통정보 폴링 태스크를 실행하고,
 //! INCIDENT_POLL_SECS가 있을 때만 돌발정보 폴링 태스크를 실행한다.
 //! 인증키의 월 호출 한도가 1,000건이라 폴링 한 번(타일 16번)마다 한도를 쓰므로 기본으로는 폴링하지 않는다.
@@ -18,6 +18,7 @@ use nav_api::collector;
 use nav_api::guideline::GuideLineTable;
 use nav_api::state::AppState;
 use routedb_core::route::RouteDb;
+use routedb_geocode::GeocodeIndex;
 use tokio::sync::broadcast;
 
 /// `ROUTE_MAPS_DIR`이 없을 때의 데이터 폴더
@@ -102,6 +103,15 @@ async fn main() {
     let guide_lines = GuideLineTable::load(&guide_line_file).expect("유도선 파일을 읽지 못함");
     println!("노면색깔유도선 {}행", guide_lines.len());
 
+    let started = Instant::now();
+    let geocoder = GeocodeIndex::open(&dir.join("geocode.idx")).expect("지오코더 색인을 열지 못함");
+    println!(
+        "지오코더 색인 열기 장소 {} 주소 {} {:.2}초",
+        geocoder.poi_count(),
+        geocoder.address_count(),
+        started.elapsed().as_secs_f64()
+    );
+
     let db = Arc::new(db);
     let http = reqwest::Client::new();
     let (events, _) = broadcast::channel(64);
@@ -138,6 +148,7 @@ async fn main() {
         db,
         accidents: Arc::new(accidents),
         guide_lines: Arc::new(guide_lines),
+        geocoder: Arc::new(geocoder),
         http,
         vworld_key,
         updates,

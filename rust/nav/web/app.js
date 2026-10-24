@@ -59,9 +59,20 @@ function setPoint(kind, point) {
     const { lng, lat } = markers[kind].getLngLat();
     points[kind] = { lat, lon: lng, name: `${lat.toFixed(5)}, ${lng.toFixed(5)}` };
     el(`${kind}-input`).value = points[kind].name;
+    nameByAddress(kind, lat, lng);
     requestRoute();
   });
   routeButton.disabled = !(points.from && points.to);
+}
+
+// 역지오코딩. 좌표로 정한 지점의 이름을 300m 안의 가장 가까운 도로명주소로 바꾼다. 없으면 좌표 그대로 둔다
+async function nameByAddress(kind, lat, lon) {
+  const response = await fetch(`/reverse?lat=${lat}&lon=${lon}`);
+  const body = await response.json();
+  const point = points[kind];
+  if (body.code !== "OK" || !point || point.lat !== lat || point.lon !== lon) return;
+  point.name = body.data.title;
+  el(`${kind}-input`).value = point.name;
 }
 
 // 지도 클릭: 출발이 없으면 출발, 있으면 도착. 시뮬레이션 중이면 가짜 위치를 그 지점으로 옮겨 이탈을 확인한다
@@ -74,11 +85,12 @@ map.on("click", (event) => {
   }
   const kind = points.from ? "to" : "from";
   setPoint(kind, { lat, lon: lng, name: `${lat.toFixed(5)}, ${lng.toFixed(5)}` });
+  nameByAddress(kind, lat, lng);
   hideResults();
   if (points.from && points.to) requestRoute();
 });
 
-// 지오코딩 검색. 입력이 멈추고 300ms 뒤에 /geocode를 부른다
+// 지오코딩 검색. 입력이 멈추고 300ms 뒤에 /geocode를 부른다. 지도 중심을 같이 보내 같은 점수의 장소는 가까운 순으로 받는다
 let searchTimer = null;
 for (const kind of ["from", "to"]) {
   const input = el(`${kind}-input`);
@@ -98,7 +110,10 @@ for (const kind of ["from", "to"]) {
 }
 
 async function search(q) {
-  const response = await fetch(`/geocode?q=${encodeURIComponent(q)}&size=8`);
+  const center = map.getCenter();
+  const response = await fetch(
+    `/geocode?q=${encodeURIComponent(q)}&size=8&lat=${center.lat.toFixed(6)}&lon=${center.lng.toFixed(6)}`,
+  );
   const body = await response.json();
   if (body.code !== "OK") {
     setStatus(`검색 실패: ${body.message}`);

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use routedb_core::route::RouteDb;
+use routedb_geocode::GeocodeIndex;
 use tokio::sync::broadcast;
 
 use crate::accident::index::AccidentIndex;
@@ -15,9 +16,11 @@ pub struct AppState {
     pub accidents: Arc<AccidentIndex>,
     /// 노면색깔유도선 표
     pub guide_lines: Arc<GuideLineTable>,
-    /// 브이월드 호출용 HTTP 클라이언트
+    /// 지오코더 색인
+    pub geocoder: Arc<GeocodeIndex>,
+    /// 바깥 API 호출용 HTTP 클라이언트
     pub http: reqwest::Client,
-    /// 브이월드 인증키
+    /// 브이월드 인증키. 배경지도 타일 프록시에 사용한다
     pub vworld_key: String,
     /// 배율 묶음을 적용 태스크로 보내는 채널
     pub updates: UpdateSender,

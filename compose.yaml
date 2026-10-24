@@ -1,5 +1,6 @@
 # docker compose up            내비 API
 # docker compose run importer  그래프 파일과 CCH 생성(배치, 실행 후 종료)
+# docker compose run importer importer-geocode  지오코더 색인 생성
 services:
   api:
     build:

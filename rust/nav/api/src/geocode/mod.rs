@@ -1,4 +1,4 @@
-//! 지오코딩 기능. 브라우저에 인증키를 두지 않기 위해 서버가 브이월드 검색 API를 대신 호출한다
+//! 지오코딩 기능. 도로명주소 전자지도와 국가관심지점정보로 만든 색인 파일에서 주소·장소를 찾고 좌표를 주소로 바꾼다
 
 mod handler;
 pub mod model;
@@ -11,5 +11,7 @@ use crate::state::AppState;
 
 /// 지오코딩 기능의 라우트 모음
 pub fn router() -> Router<AppState> {
-    Router::new().route("/geocode", get(handler::search))
+    Router::new()
+        .route("/geocode", get(handler::search))
+        .route("/reverse", get(handler::reverse))
 }
