@@ -11,7 +11,8 @@ PGPW=$(grep '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)
 LAYERS="v_buld:14:18 v_road:10:18 v_road_major:7:12 v_rw:13:18 v_sig:6:12 v_emd:10:14"
 
 req() { # 메서드 URL 콘텐츠타입 본문
-  code=$(curl -s -o /tmp/gs_body -w "%{http_code}" -u "admin:$PW" -X "$1" -H "Content-Type: $3" "$2" -d "$4")
+  code=$(curl -s -o /tmp/gs_body -w "%{http_code}" -u "admin:$PW" -X "$1" -H "Content-Type: $3" "$2" -d "$4") \
+    || { echo "GeoServer에 연결할 수 없음: $GS"; exit 1; }
   echo "$1 ${2#"$GS"/} -> $code"
 }
 

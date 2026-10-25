@@ -60,11 +60,12 @@ rust/
     collector/incident.rs   돌발상황정보 폴링, 전면·부분 통제 배율 변환
     guideline/mod.rs        노면색깔유도선 표. 교차로 이름과 노선으로 출구의 유도선 색을 찾는다
     tiles/mod.rs            브이월드 타일 프록시 라우트
-    tiles/handler.rs        GET /tiles/{layer}/{z}/{x}/{y}
+    tiles/handler.rs        GET /tiles/{layer}/{z}/{x}/{y}, GET /vtiles/{layer}/{z}/{x}/{y}
   nav/web/
     index.html              MapLibre 지도 페이지
-    app.js                  브이월드 래스터 소스로 지도 초기화
+    app.js                  지도, 검색, 후보 비교, 주행 추적, 음성 안내
     style.css
+    style-day.json          자체 지도 주간 스타일
     accident/model.rs       사고다발지역과 경로 위 구간 타입
     accident/index.rs       사고다발 폴리곤 R-tree, 경로 좌표 열과의 교차
   nav/api/tests/
@@ -895,7 +896,7 @@ line graph를 추가하면서 VERSION을 3으로 올렸다. 헤더는 56바이�
 
 ## 테스트
 
-`cargo test --workspace`로 61개를 실행한다. `geocode_api`는 임시 폴더에 작은 색인 파일을 만들어 service를 호출한다. `route_api`는 전국 그래프 파일을 열어 라우터에 요청을 보내므로 debug 빌드에서는 R-tree 생성에 129초가 소요되고 `cargo test --release -p nav-api`로는 3초이다.
+`cargo test --workspace`로 62개를 실행한다. `geocode_api`는 임시 폴더에 작은 색인 파일을 만들어 service를 호출한다. `route_api`는 전국 그래프 파일을 열어 라우터에 요청을 보내므로 debug 빌드에서는 R-tree 생성에 129초가 소요되고 `cargo test --release -p nav-api`로는 3초이다.
 
 | 파일 | 테스트 | 확인 내용 |
 |---|---|---|

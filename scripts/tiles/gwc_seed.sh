@@ -17,6 +17,8 @@ seed() {
     -d "{\"seedRequest\":{\"name\":\"emap:$1\",\"gridSetId\":\"EPSG:900913\",\"zoomStart\":$2,\"zoomStop\":$3,\"format\":\"application/vnd.mapbox-vector-tile\",\"type\":\"seed\",\"threadCount\":$THREADS}}"
 }
 
+curl -s -o /dev/null -u "admin:$PW" "$GS/rest/about/version.json" || { echo "GeoServer에 연결할 수 없음: $GS"; exit 1; }
+
 if [ "$#" -eq 3 ]; then
   seed "$1" "$2" "$3"
 else
