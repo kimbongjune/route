@@ -16,6 +16,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use nav_api::accident::index::AccidentIndex;
+use nav_api::caution::construction::ConstructionIndex;
+use nav_api::caution::enforce::EnforceTable;
+use nav_api::caution::risk::{self, RiskStore};
+use nav_api::caution::section::{FOG_MATCH_M, ICING_MATCH_M, SectionIndex};
+use nav_api::caution::zone::ZoneIndex;
 use nav_api::collector;
 use nav_api::guideline::GuideLineTable;
 use nav_api::route::toll::TollTable;
@@ -116,7 +121,21 @@ async fn main() {
         started.elapsed().as_secs_f64()
     );
     let started = Instant::now();
-    let accidents = AccidentIndex::load(&accident_file).expect("사고다발 폴리곤 파일을 읽지 못함");
+    // 사고다발 폴리곤에 UTIC TAAS 사고다발 폴리곤(scripts/caution/build_tsdms.py)이 있으면 더한다
+    let taas_file = maps.join("주의운전").join("TAAS_폴리곤.csv");
+    let mut accident_files = vec![accident_file.as_path()];
+    if taas_file.exists() {
+        accident_files.push(taas_file.as_path());
+    }
+    let accidents =
+        AccidentIndex::load_all(&accident_files).expect("사고다발 폴리곤 파일을 읽지 못함");
+    let hazard_file = maps.join("주의운전").join("위험요소.csv");
+    let hazards = if hazard_file.exists() {
+        AccidentIndex::load(&hazard_file).expect("위험요소 파일을 읽지 못함")
+    } else {
+        AccidentIndex::build(Vec::new(), Vec::new())
+    };
+    println!("도로환경 위험요소 {}개", hazards.len());
     println!(
         "사고다발 폴리곤 {}개 R-tree 생성 {:.2}초",
         accidents.len(),
@@ -125,6 +144,45 @@ async fn main() {
 
     let guide_lines = GuideLineTable::load(&guide_line_file).expect("유도선 파일을 읽지 못함");
     println!("노면색깔유도선 {}행", guide_lines.len());
+
+    // 상습 결빙구간과 안개 잦은 구간. scripts/caution의 스크립트로 만든 파일이 없으면 그 경고 없이 실행한다
+    let load_sections = |name: &str, match_m: f64| {
+        let file = maps.join("주의운전").join(name);
+        if file.exists() {
+            SectionIndex::load(&file, match_m).expect("주의 구간 파일을 읽지 못함")
+        } else {
+            SectionIndex::build(Vec::new(), match_m)
+        }
+    };
+    let icing = load_sections("결빙구간.csv", ICING_MATCH_M);
+    let fog = load_sections("안개구간.csv", FOG_MATCH_M);
+    println!(
+        "상습 결빙구간 {}개, 안개 잦은 구간 {}개",
+        icing.len(),
+        fog.len()
+    );
+    let zone_file = maps.join("주의운전").join("보호구역.csv");
+    let zones = if zone_file.exists() {
+        ZoneIndex::load(&zone_file).expect("보호구역 파일을 읽지 못함")
+    } else {
+        ZoneIndex::build(Vec::new())
+    };
+    println!("보호구역 {}곳", zones.len());
+    let enforce = EnforceTable::load(
+        &maps
+            .join("전국무인교통단속카메라표준데이터")
+            .join("카메라_링크.csv"),
+    )
+    .expect("카메라_링크.csv를 읽지 못함");
+    println!("구간단속 시점 카메라 {}대", enforce.len());
+    // 공사 지점. scripts/caution/build_construction.py로 만든 파일이 없으면 공사 경고 없이 실행한다
+    let construction_file = maps.join("주의운전").join("공사구간.csv");
+    let constructions = if construction_file.exists() {
+        ConstructionIndex::load(&construction_file).expect("공사구간 파일을 읽지 못함")
+    } else {
+        ConstructionIndex::build(Vec::new())
+    };
+    println!("공사 지점 {}곳", constructions.len());
 
     let toll_dir = maps.join("유료도로");
     let tolls = TollTable::load(&toll_dir.join("영업소.csv"), &toll_dir.join("요금표.csv"))
@@ -146,6 +204,23 @@ async fn main() {
 
     let db = Arc::new(db);
     let http = reqwest::Client::new();
+    // 도로위험상황예보. UTIC 키가 있으면 ROAD_RISK_POLL_SECS(없으면 1,200초)마다 받는다. 키는 등록 IP 대역에서만 동작한다
+    let risk = Arc::new(RiskStore::new());
+    match env_value("UTIC_API_KEY") {
+        Some(key) => {
+            let secs: u64 = env_value("ROAD_RISK_POLL_SECS")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1_200);
+            println!("도로위험상황예보 폴링 {secs}초 간격");
+            tokio::spawn(risk::run(
+                http.clone(),
+                key,
+                Arc::clone(&risk),
+                Duration::from_secs(secs),
+            ));
+        }
+        None => println!("UTIC_API_KEY가 없어 도로위험상황예보를 받지 않음"),
+    }
     let (events, _) = broadcast::channel(64);
     let updates = collector::start(Arc::clone(&db), events.clone());
     let poll_secs: Option<u64> = env_value("TRAFFIC_POLL_SECS").and_then(|v| v.parse().ok());
@@ -180,6 +255,13 @@ async fn main() {
         db,
         accidents: Arc::new(accidents),
         guide_lines: Arc::new(guide_lines),
+        hazards: Arc::new(hazards),
+        icing: Arc::new(icing),
+        fog: Arc::new(fog),
+        zones: Arc::new(zones),
+        enforce: Arc::new(enforce),
+        risk,
+        constructions: Arc::new(constructions),
         geocoder: Arc::new(geocoder),
         tolls: Arc::new(tolls),
         http,

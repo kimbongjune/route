@@ -9,7 +9,8 @@ from pyproj import Transformer
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common import ROOT
 
-NODE_DIR = ROOT / "maps" / "[2026-09-14]NODELINKDATA"
+# 표준노드링크 판. 모든 스크립트가 이 경로를 사용하며 Rust 임포터는 importer-knl/src/paths.rs의 moct_folder이다
+NODE_DIR = ROOT / "maps" / "[2026-10-14]NODELINKDATA"
 TM = "EPSG:5186"
 WGS84 = "EPSG:4326"
 _TO_WGS84 = Transformer.from_crs(TM, WGS84, always_xy=True)

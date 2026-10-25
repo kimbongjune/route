@@ -30,7 +30,7 @@ mod tests {
     #[test]
     fn read_toll_link_rows() {
         let tolls = read_toll_links(&crate::paths::toll_links());
-        assert_eq!(tolls.len(), 4497);
+        assert_eq!(tolls.len(), 4502);
         assert!(tolls.contains(&TollInput::new(1410199400, 246)));
     }
 }

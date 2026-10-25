@@ -3,21 +3,19 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use routedb_core::route::{Profile, Route, RouteDb};
+use routedb_core::route::{Profile, Route, RouteDb, Section};
 
 use super::guidance;
 use super::model::{Candidate, LatLon, RouteRequest, RouteResponse, RoutesResponse};
-use super::toll::TollTable;
-use crate::accident::index::AccidentIndex;
+use crate::caution::construction;
+use crate::caution::zone::{self, ZoneKind};
 use crate::error::AppError;
-use crate::guideline::GuideLineTable;
+use crate::state::RouteExtras;
 
 /// 요청을 검증하고 블로킹 스레드에서 경로를 탐색한 뒤 경로가 지나는 사고다발 구간과 통행료를 더한다
 pub async fn find_route(
     db: Arc<RouteDb>,
-    accidents: Arc<AccidentIndex>,
-    guide_lines: Arc<GuideLineTable>,
-    tolls: Arc<TollTable>,
+    extras: RouteExtras,
     input: RouteRequest,
 ) -> Result<RouteResponse, AppError> {
     validate_lat_lon(input.from)?;
@@ -36,7 +34,7 @@ pub async fn find_route(
         );
         let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
         (
-            route.map(|route| decorate(route, &accidents, &guide_lines, &tolls, elapsed_ms)),
+            route.map(|route| decorate(route, &extras, elapsed_ms)),
             elapsed_ms,
         )
     })
@@ -46,21 +44,55 @@ pub async fn find_route(
     route.ok_or(AppError::RouteNotFound)
 }
 
-/// 경로에 사고다발 구간, 통행료, 안내문, 경고를 더해 응답으로 만든다
-fn decorate(
-    route: Route,
-    accidents: &AccidentIndex,
-    guide_lines: &GuideLineTable,
-    tolls: &TollTable,
-    elapsed_ms: f64,
-) -> RouteResponse {
-    let accident_sections = accidents.sections(&route.geometry, route.distance_m);
-    let toll = tolls.fee(&route.tolls, 0);
-    let instructions = guidance::instructions(&route, &guide_lines);
-    let warnings = guidance::warnings(&route, &accident_sections, &toll);
+/// 경로에 사고다발 구간, 결빙·안개 구간, 보호구역, 통행료, 안내문, 경고를 더해 응답으로 만든다.
+/// 어린이보호구역 구간은 경로의 school_zones에도 넣는다
+fn decorate(mut route: Route, extras: &RouteExtras, elapsed_ms: f64) -> RouteResponse {
+    let accident_sections = extras.accidents.sections(&route.geometry, route.distance_m);
+    let hazard_sections = extras.hazards.sections(&route.geometry, route.distance_m);
+    let icing_sections = extras.icing.sections(&route.geometry, route.distance_m);
+    let fog_sections = extras.fog.sections(&route.geometry, route.distance_m);
+    // 보호구역은 일반도로에 지정되므로 고속국도(101)·도시고속국도(102) 구간과 겹치는 부분은 뺀다
+    let expressway: Vec<(f64, f64)> = route
+        .segments
+        .iter()
+        .filter(|s| s.rank == 101 || s.rank == 102)
+        .map(|s| (s.from_m, s.to_m))
+        .collect();
+    let protect_zones = zone::excluding(
+        extras.zones.sections(&route.geometry, route.distance_m),
+        &expressway,
+    );
+    route.school_zones = protect_zones
+        .iter()
+        .filter(|z| z.kind == ZoneKind::Child)
+        .map(|z| Section {
+            from_m: z.from_m,
+            to_m: z.to_m,
+        })
+        .collect();
+    let enforce_sections = extras.enforce.sections(&route.pois);
+    let risks = extras.risk.hits(&route.geometry, route.distance_m);
+    let constructions =
+        extras
+            .constructions
+            .hits(&route.geometry, route.distance_m, construction::today_kst());
+    let toll = extras.tolls.fee(&route.tolls, 0);
+    let instructions = guidance::instructions(&route, &extras.guide_lines);
+    let cautions = guidance::Cautions {
+        accident_sections: &accident_sections,
+        hazard_sections: &hazard_sections,
+        icing_sections: &icing_sections,
+        fog_sections: &fog_sections,
+        protect_zones: &protect_zones,
+        enforce_sections: &enforce_sections,
+        risks: &risks,
+        constructions: &constructions,
+    };
+    let warnings = guidance::warnings(&route, &cautions, &toll);
     RouteResponse {
         route,
         accident_sections,
+        protect_zones,
         toll,
         instructions,
         warnings,
@@ -71,9 +103,7 @@ fn decorate(
 /// 최소시간 경로의 대안경로를 블로킹 스레드에서 찾아 응답으로 만든다
 async fn find_alternatives(
     db: Arc<RouteDb>,
-    accidents: Arc<AccidentIndex>,
-    guide_lines: Arc<GuideLineTable>,
-    tolls: Arc<TollTable>,
+    extras: RouteExtras,
     base: Route,
     input: RouteRequest,
     count: usize,
@@ -90,7 +120,7 @@ async fn find_alternatives(
         let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
         routes
             .into_iter()
-            .map(|r| decorate(r, &accidents, &guide_lines, &tolls, elapsed_ms))
+            .map(|r| decorate(r, &extras, elapsed_ms))
             .collect()
     })
     .await
@@ -104,22 +134,13 @@ const ALTERNATIVE_COUNT: usize = 2;
 /// 경로를 하나도 찾지 못하면 RouteNotFound이다. 요청의 profile은 쓰지 않는다
 pub async fn find_routes(
     db: Arc<RouteDb>,
-    accidents: Arc<AccidentIndex>,
-    guide_lines: Arc<GuideLineTable>,
-    tolls: Arc<TollTable>,
+    extras: RouteExtras,
     input: RouteRequest,
 ) -> Result<RoutesResponse, AppError> {
     let mut candidates: Vec<Candidate> = Vec::new();
     for profile in [Profile::Time, Profile::Distance, Profile::Free] {
         let request = RouteRequest { profile, ..input };
-        let found = find_route(
-            Arc::clone(&db),
-            Arc::clone(&accidents),
-            Arc::clone(&guide_lines),
-            Arc::clone(&tolls),
-            request,
-        )
-        .await;
+        let found = find_route(Arc::clone(&db), extras.clone(), request).await;
         let route = match found {
             Ok(route) => route,
             Err(AppError::RouteNotFound) => continue,
@@ -151,9 +172,7 @@ pub async fn find_routes(
     {
         let alternatives = find_alternatives(
             Arc::clone(&db),
-            Arc::clone(&accidents),
-            Arc::clone(&guide_lines),
-            Arc::clone(&tolls),
+            extras.clone(),
             base,
             input,
             ALTERNATIVE_COUNT,

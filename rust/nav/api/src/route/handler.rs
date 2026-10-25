@@ -14,14 +14,8 @@ pub async fn create(
     State(state): State<AppState>,
     ApiJson(input): ApiJson<RouteRequest>,
 ) -> Result<ApiResponse<RouteResponse>, AppError> {
-    let response = service::find_route(
-        state.db,
-        state.accidents,
-        state.guide_lines,
-        state.tolls,
-        input,
-    )
-    .await?;
+    let extras = state.route_extras();
+    let response = service::find_route(state.db, extras, input).await?;
     Ok(ApiResponse::ok(response))
 }
 
@@ -30,13 +24,7 @@ pub async fn compare(
     State(state): State<AppState>,
     ApiJson(input): ApiJson<RouteRequest>,
 ) -> Result<ApiResponse<RoutesResponse>, AppError> {
-    let response = service::find_routes(
-        state.db,
-        state.accidents,
-        state.guide_lines,
-        state.tolls,
-        input,
-    )
-    .await?;
+    let extras = state.route_extras();
+    let response = service::find_routes(state.db, extras, input).await?;
     Ok(ApiResponse::ok(response))
 }

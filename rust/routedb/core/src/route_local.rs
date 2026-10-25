@@ -9,7 +9,7 @@ use crate::profile::EXPRESSWAY;
 use crate::route::{
     Profile, Route, RouteDb, end_bearings, heading_diff, planar_distance, planar_length, point_at,
 };
-use crate::route_alley::{ALLEY_SNAP_MARGIN_M, ALLEY_SNAP_MAX_M, ALLEY_SPEED_KMH};
+use crate::route_alley::{ALLEY_SNAP_MARGIN_M, ALLEY_SNAP_MAX_M, ALLEY_SPEED_KMH, boundary_step};
 use crate::snap::Snap;
 
 /// 짧은 거리 탐색을 하는 출발·도착 직선거리 상한(m)
@@ -532,7 +532,8 @@ impl RouteDb {
                 bearing_deg: end_bearings(&pts, 15.0).0,
             }
         };
-        let mut parts: Vec<Route> = Vec::new();
+        // (골목 구간 여부, 경로)
+        let mut parts: Vec<(bool, Route)> = Vec::new();
         let mut i = 0;
         while i < segs.len() {
             if let Seg::Alley(_) = segs[i] {
@@ -542,7 +543,7 @@ impl RouteDb {
                     i += 1;
                 }
                 let empty = self.empty_route(profile, snap_at(0, 0.0), snap_at(0, 0.0));
-                parts.push(self.splice(empty, &pieces, &[], None, None));
+                parts.push((true, self.splice(empty, &pieces, &[], None, None)));
                 continue;
             }
             let mut block: Vec<(u32, f64, f64)> = Vec::new();
@@ -564,9 +565,43 @@ impl RouteDb {
                 Some(s) if i >= segs.len() => s.clone(),
                 _ => snap_at(last.0, last.2),
             };
-            parts.push(self.build(profile, a, b, dist, &edges));
+            parts.push((false, self.build(profile, a, b, dist, &edges)));
         }
-        let mut route = parts.into_iter().reduce(concat).expect("경로 조각이 없음");
+        // 골목과 큰길이 바뀌는 자리의 안내 지점
+        let mut boundary = Vec::new();
+        let mut walked = 0.0;
+        for w in parts.windows(2) {
+            let ((a_alley, a), (b_alley, b)) = (&w[0], &w[1]);
+            walked += a.distance_m;
+            if a_alley == b_alley {
+                continue;
+            }
+            let to_rank = if *b_alley {
+                108
+            } else {
+                b.links
+                    .first()
+                    .and_then(|&l| self.edge_of_link(l))
+                    .map_or(108, |e| self.file.road_rank()[e as usize])
+            };
+            let from_name = a.segments.last().map_or("", |s| s.name.as_str());
+            let to_name = b.segments.first().map_or("", |s| s.name.as_str());
+            boundary.extend(boundary_step(
+                walked,
+                &a.geometry,
+                &b.geometry,
+                from_name,
+                to_name,
+                to_rank,
+            ));
+        }
+        let mut route = parts
+            .into_iter()
+            .map(|p| p.1)
+            .reduce(concat)
+            .expect("경로 조각이 없음");
+        route.steps.extend(boundary);
+        route.steps.sort_by(|x, y| x.at_m.total_cmp(&y.at_m));
         let alley_snap = |a: &AlleySnap, p: &Piece| Snap {
             edge: u32::MAX,
             distance_m: a.distance_m,
@@ -635,7 +670,7 @@ fn concat(mut a: Route, b: Route) -> Route {
         seg.from_m += shift;
         seg.to_m += shift;
         match a.segments.last_mut() {
-            Some(l) if l.name == seg.name => {
+            Some(l) if l.name == seg.name && l.rank == seg.rank => {
                 l.to_m = seg.to_m;
                 l.links += seg.links;
             }

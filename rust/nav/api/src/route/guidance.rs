@@ -6,6 +6,11 @@ use serde::Serialize;
 
 use super::toll::{StopKind, TollFee};
 use crate::accident::model::AccidentSection;
+use crate::caution::construction::ConstructionHit;
+use crate::caution::enforce::EnforceSection;
+use crate::caution::risk::{RiskHit, element_text, grade_text};
+use crate::caution::section::CautionSection;
+use crate::caution::zone::{ZoneKind, ZoneSection};
 use crate::guideline::GuideLineTable;
 
 /// 안내 지점 한 곳의 안내문
@@ -38,6 +43,24 @@ pub enum WarningKind {
     SpeedBump,
     /// 사고다발 구간
     AccidentZone,
+    /// 도로환경 위험요소 구간(급커브, 낙석도로, 철길 건널목 등)
+    Hazard,
+    /// 상습 결빙구간
+    Icing,
+    /// 안개 잦은 구간
+    Fog,
+    /// 구간단속 구간
+    SectionCamera,
+    /// 도로위험상황예보 지점
+    RoadRisk,
+    /// 공사 지점
+    Construction,
+    /// 어린이보호구역
+    SchoolZone,
+    /// 노인보호구역
+    ElderlyZone,
+    /// 장애인보호구역
+    DisabledZone,
     /// 요금소
     Toll,
     /// 통과제한 높이
@@ -151,13 +174,21 @@ pub fn is_intersection_name(name: &str) -> bool {
         && tail.chars().any(|c| c.is_ascii_digit()))
 }
 
+/// 경로가 지나는 주의 구간과 지점. 경고를 만들 때 사용한다
+pub struct Cautions<'a> {
+    pub accident_sections: &'a [AccidentSection],
+    pub hazard_sections: &'a [AccidentSection],
+    pub icing_sections: &'a [CautionSection],
+    pub fog_sections: &'a [CautionSection],
+    pub protect_zones: &'a [ZoneSection],
+    pub enforce_sections: &'a [EnforceSection],
+    pub risks: &'a [RiskHit],
+    pub constructions: &'a [ConstructionHit],
+}
+
 /// 경로 위 경고를 거리 순서로 만든다. 경로 전체에 해당하는 통과제한은 맨 앞이다.
 /// 요금소는 지나는 자리마다 하나이며 요금이 정해지는 출구에는 금액을, 입구에는 "진입"을 넣는다
-pub fn warnings(
-    route: &Route,
-    accident_sections: &[AccidentSection],
-    toll: &TollFee,
-) -> Vec<Warning> {
+pub fn warnings(route: &Route, cautions: &Cautions, toll: &TollFee) -> Vec<Warning> {
     let mut out = Vec::new();
     if route.min_height_cm > 0 {
         out.push(Warning {
@@ -199,18 +230,107 @@ pub fn warnings(
             text,
         });
     }
-    for section in accident_sections {
+    for section in cautions.accident_sections {
         let accidents: u32 = section.zones.iter().map(|z| z.accidents).sum();
+        let mut text = format!(
+            "{} 사고다발 구간 {:.0}m",
+            section.kind,
+            section.to_m - section.from_m
+        );
+        // TAAS 사고다발 폴리곤은 사고 건수가 없어 0이다
+        if accidents > 0 {
+            text.push_str(&format!(", 사고 {accidents}건"));
+        }
         along.push(Warning {
             kind: WarningKind::AccidentZone,
             at_m: Some(section.from_m),
             to_m: Some(section.to_m),
+            text,
+        });
+    }
+    for section in cautions.hazard_sections {
+        along.push(Warning {
+            kind: WarningKind::Hazard,
+            at_m: Some(section.from_m),
+            to_m: Some(section.to_m),
             text: format!(
-                "{} 사고다발 구간 {:.0}m, 사고 {}건",
+                "{} 위험 구간 {:.0}m",
                 section.kind,
-                section.to_m - section.from_m,
-                accidents
+                section.to_m - section.from_m
             ),
+        });
+    }
+    for section in cautions.icing_sections {
+        along.push(Warning {
+            kind: WarningKind::Icing,
+            at_m: Some(section.from_m),
+            to_m: Some(section.to_m),
+            text: format!("상습 결빙구간 {:.0}m", section.to_m - section.from_m),
+        });
+    }
+    for section in cautions.fog_sections {
+        along.push(Warning {
+            kind: WarningKind::Fog,
+            at_m: Some(section.from_m),
+            to_m: Some(section.to_m),
+            text: format!("안개 잦은 구간 {:.0}m", section.to_m - section.from_m),
+        });
+    }
+    for zone in cautions.protect_zones {
+        let (kind, label) = match zone.kind {
+            ZoneKind::Child => (WarningKind::SchoolZone, "어린이보호구역"),
+            ZoneKind::Elderly => (WarningKind::ElderlyZone, "노인보호구역"),
+            ZoneKind::Disabled => (WarningKind::DisabledZone, "장애인보호구역"),
+        };
+        let mut text = format!("{label} {:.0}m", zone.to_m - zone.from_m);
+        if let Some(limit) = zone.limit() {
+            text.push_str(&format!(", 제한속도 {limit}"));
+        }
+        along.push(Warning {
+            kind,
+            at_m: Some(zone.from_m),
+            to_m: Some(zone.to_m),
+            text,
+        });
+    }
+    for section in cautions.enforce_sections {
+        let mut text = format!("구간단속 {:.1}km", (section.to_m - section.from_m) / 1000.0);
+        if section.limit > 0 {
+            text.push_str(&format!(", 제한속도 {}", section.limit));
+        }
+        along.push(Warning {
+            kind: WarningKind::SectionCamera,
+            at_m: Some(section.from_m),
+            to_m: Some(section.to_m),
+            text,
+        });
+    }
+    for hit in cautions.risks {
+        let element = element_text(&hit.point.element).unwrap_or("위험 예보");
+        let text = match grade_text(hit.point.grade) {
+            Some(grade) => format!("도로 위험: {element}, {grade}"),
+            None => format!("도로 위험: {element}"),
+        };
+        along.push(Warning {
+            kind: WarningKind::RoadRisk,
+            at_m: Some(hit.at_m),
+            to_m: None,
+            text,
+        });
+    }
+    for hit in cautions.constructions {
+        let c = &hit.construction;
+        let name: String = c.name.chars().take(40).collect();
+        let mut text = format!("공사 중: {name}");
+        if !c.control.is_empty() {
+            let control: String = c.control.chars().take(30).collect();
+            text.push_str(&format!(" ({control})"));
+        }
+        along.push(Warning {
+            kind: WarningKind::Construction,
+            at_m: Some(hit.at_m),
+            to_m: None,
+            text,
         });
     }
     for stop in &toll.stops {

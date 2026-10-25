@@ -5,7 +5,10 @@ use std::io;
 use std::path::Path;
 
 use crate::alley::{AlleyFile, AlleySnap, Piece, Search};
-use crate::route::{Profile, RoadSegment, Route, RouteDb, heading_diff, planar_length, point_at};
+use crate::route::{
+    Profile, RoadSegment, Route, RouteDb, Step, Turn, classify, end_bearings, heading_diff,
+    planar_length, point_at, sign_color, turn_angle,
+};
 use crate::snap::Snap;
 
 /// 골목 스냅을 찾는 최대 거리(m)
@@ -50,6 +53,45 @@ pub fn reverse_pieces(pieces: &[Piece]) -> Vec<Piece> {
             to_frac: p.from_frac,
         })
         .collect()
+}
+
+/// 골목 링크의 안내 표지 색을 정하는 도로등급. 108 기타
+const ALLEY_RANK: u8 = 108;
+
+/// 골목과 큰길이 바뀌는 자리의 안내 지점. 앞 구간 끝 15m와 뒤 구간 처음 15m의 방위각 차이로 회전을 정하며,
+/// 직진이거나 도로명이 같은 50° 미만의 꺾임이면 None이다. 분기 수는 큰길 양쪽이므로 2로 한다
+pub(crate) fn boundary_step(
+    at_m: f64,
+    before: &[(f64, f64)],
+    after: &[(f64, f64)],
+    from_name: &str,
+    to_name: &str,
+    to_rank: u8,
+) -> Option<Step> {
+    if before.len() < 2 || after.len() < 2 {
+        return None;
+    }
+    let angle = turn_angle(end_bearings(before, 15.0).1, end_bearings(after, 15.0).0);
+    let turn = classify(angle);
+    let slight = matches!(turn, Turn::SlightLeft | Turn::SlightRight);
+    if turn == Turn::Straight || (slight && from_name == to_name) {
+        return None;
+    }
+    let (lat, lon) = after[0];
+    Some(Step {
+        at_m,
+        lat,
+        lon,
+        node_name: String::new(),
+        turn,
+        angle,
+        from_name: from_name.to_string(),
+        to_name: to_name.to_string(),
+        to_rank,
+        sign: sign_color(to_rank),
+        branches: 2,
+        clock: None,
+    })
 }
 
 /// 골목 구간 하나의 좌표, 길이, LINK_ID, 도로명 구간
@@ -197,6 +239,7 @@ impl RouteDb {
                     from_m: leg.length,
                     to_m: leg.length + len,
                     links: 1,
+                    rank: ALLEY_RANK,
                 }),
             }
             leg.length += len;
@@ -236,6 +279,32 @@ impl RouteDb {
         }
         let (pre, suf) = (self.leg(prefix), self.leg(suffix));
         let shift = pre.length;
+        // 골목에서 큰길로, 큰길에서 골목으로 바뀌는 자리의 안내 지점
+        let road_rank = route
+            .links
+            .first()
+            .and_then(|&l| self.edge_of_link(l))
+            .map_or(ALLEY_RANK, |e| self.file.road_rank()[e as usize]);
+        let name = |segs: &[RoadSegment], last: bool| {
+            let s = if last { segs.last() } else { segs.first() };
+            s.map_or(String::new(), |s| s.name.clone())
+        };
+        let enter = boundary_step(
+            shift,
+            &pre.points,
+            &route.geometry,
+            &name(&pre.segments, true),
+            &name(&route.segments, false),
+            road_rank,
+        );
+        let leave = boundary_step(
+            shift + route.distance_m,
+            &route.geometry,
+            &suf.points,
+            &name(&route.segments, true),
+            &name(&suf.segments, false),
+            ALLEY_RANK,
+        );
         for p in &mut route.pois {
             p.at_m += shift;
         }
@@ -245,6 +314,8 @@ impl RouteDb {
         for s in &mut route.steps {
             s.at_m += shift;
         }
+        route.steps.splice(0..0, enter);
+        route.steps.extend(leave);
         for z in &mut route.school_zones {
             z.from_m += shift;
             z.to_m += shift;

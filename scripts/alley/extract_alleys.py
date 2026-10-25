@@ -30,9 +30,12 @@ from shapely.strtree import STRtree
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common import ROOT, write_csv
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tollroad"))
+from nodelink import NODE_DIR  # noqa: E402
+
 TM5186, UTMK, WGS84 = "EPSG:5186", "EPSG:5179", "EPSG:4326"
 CENTERLINE = sorted(glob.glob(str(ROOT / "maps" / "도로중심선" / "*" / "*.shp")))
-MOCT = ROOT / "maps" / "[2026-09-14]NODELINKDATA"
+MOCT = NODE_DIR
 CODE = sys.argv[1] if len(sys.argv) > 1 else "11170"
 COVER_M = 15      # 표준노드링크 링크에서 이 거리 안이면 같은 도로
 STUB_M = 30       # 되살리는 연결 토막의 최대 길이

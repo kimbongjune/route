@@ -126,10 +126,80 @@ pub fn read_all(dir: &Path) -> (Vec<AlleyNode>, Vec<AlleyLink>) {
     (nodes, links)
 }
 
+/// 골목 끝점끼리 같은 노드로 보는 거리(m). 추출 스크립트의 JOIN_M과 같다
+pub const JOIN_M: f64 = 0.5;
+
+/// 골목 파일 입력 결과 수
+#[derive(Debug, Default)]
+pub struct BuildStats {
+    /// 그래프에 없는 노드를 가리키거나 좌표가 2개 미만이라 뺀 링크
+    pub skipped: usize,
+    /// 다른 새 노드와 JOIN_M 안이라 합친 새 노드
+    pub merged_nodes: usize,
+    /// 노드를 합친 뒤 양 끝 노드와 길이가 같은 링크가 이미 있어 뺀 링크
+    pub duplicate_links: usize,
+}
+
+/// 새 노드(표준노드링크 노드가 아닌 골목 노드) 중 서로 JOIN_M 안인 것을 한 노드로 합친다. 시도마다 따로 추출하여
+/// 시도 경계를 걸치는 골목 선이 양쪽 시도에 모두 들어가고 같은 자리의 끝점이 서로 다른 번호를 갖기 때문이다.
+/// 반환값은 합쳐진 노드 번호에서 대표 노드 번호
+pub fn merge_nodes(nodes: &[AlleyNode]) -> HashMap<u64, u64> {
+    // 약 1m 칸에 노드를 넣고 주변 3×3칸에서 JOIN_M 안인 노드를 찾는다
+    const CELL: f64 = 0.00001;
+    let key = |lat: f64, lon: f64| ((lat / CELL).floor() as i64, (lon / CELL).floor() as i64);
+    let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, n) in nodes.iter().enumerate() {
+        cells.entry(key(n.lat, n.lon)).or_default().push(i);
+    }
+    let mut parent: Vec<usize> = (0..nodes.len()).collect();
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+    let dist = |a: &AlleyNode, b: &AlleyNode| {
+        let dy = (a.lat - b.lat) * 111_320.0;
+        let dx = (a.lon - b.lon) * 111_320.0 * a.lat.to_radians().cos();
+        dx.hypot(dy)
+    };
+    for (i, n) in nodes.iter().enumerate() {
+        let (cy, cx) = key(n.lat, n.lon);
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                for &j in cells
+                    .get(&(cy + dy, cx + dx))
+                    .map_or(&[][..], Vec::as_slice)
+                {
+                    if j > i && dist(n, &nodes[j]) <= JOIN_M {
+                        let (a, b) = (find(&mut parent, i), find(&mut parent, j));
+                        if a != b {
+                            parent[a.max(b)] = a.min(b);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut out = HashMap::new();
+    for i in 0..nodes.len() {
+        let r = find(&mut parent, i);
+        if r != i {
+            out.insert(nodes[i].id, nodes[r].id);
+        }
+    }
+    out
+}
+
 /// 골목 파일 입력을 만든다. 노드 번호는 링크에 나오는 순서이고, 표준노드링크 노드는 그 노드에서 나가는 간선(비율 0)과
 /// 들어오는 간선(비율 1)을, 링크 위 교차로는 그 링크와 반대 방향 링크의 위치 비율을 포털로 갖는다.
-/// 그래프에 없는 노드나 링크를 가리키는 골목은 뺀다. 반환값은 (입력, 뺀 링크 수)
-pub fn build(nodes: &[AlleyNode], links: &[AlleyLink], graph: &GraphFile) -> (AlleyBuilder, usize) {
+/// 그래프에 없는 노드나 링크를 가리키는 골목은 빼고, JOIN_M 안의 새 노드는 합친다(`merge_nodes`)
+pub fn build(
+    nodes: &[AlleyNode],
+    links: &[AlleyLink],
+    graph: &GraphFile,
+) -> (AlleyBuilder, BuildStats) {
     let moct_node: HashMap<u64, u32> = graph
         .node_id()
         .iter()
@@ -143,6 +213,19 @@ pub fn build(nodes: &[AlleyNode], links: &[AlleyLink], graph: &GraphFile) -> (Al
         .map(|(e, &id)| (id, e as u32))
         .collect();
     let new_node: HashMap<u64, &AlleyNode> = nodes.iter().map(|n| (n.id, n)).collect();
+    let merged = merge_nodes(nodes);
+    let canon = |id: u64| merged.get(&id).copied().unwrap_or(id);
+    // 대표 노드마다 자신과 합쳐진 노드 번호
+    let mut members: HashMap<u64, Vec<u64>> = HashMap::new();
+    for (&id, &rep) in &merged {
+        members.entry(rep).or_insert_with(|| vec![rep]).push(id);
+    }
+    let mut stats = BuildStats {
+        merged_nodes: merged.len(),
+        ..Default::default()
+    };
+    let mut seen_links: std::collections::HashSet<(u64, u64, i64)> =
+        std::collections::HashSet::new();
 
     let mut b = AlleyBuilder::default();
     let mut index: HashMap<u64, u32> = HashMap::new();
@@ -150,11 +233,17 @@ pub fn build(nodes: &[AlleyNode], links: &[AlleyLink], graph: &GraphFile) -> (Al
     let mut names: HashMap<String, u32> = HashMap::new();
     b.names.push(String::new());
     names.insert(String::new(), 0);
-    let mut skipped = 0;
     for l in links {
         let known = |id: u64| moct_node.contains_key(&id) || new_node.contains_key(&id);
         if !known(l.from) || !known(l.to) || l.geometry.len() < 2 {
-            skipped += 1;
+            stats.skipped += 1;
+            continue;
+        }
+        let (lf, lt) = (canon(l.from), canon(l.to));
+        if lf == lt
+            || !seen_links.insert((lf.min(lt), lf.max(lt), (l.length * 10.0).round() as i64))
+        {
+            stats.duplicate_links += 1;
             continue;
         }
         let mut node_of = |id: u64, b: &mut AlleyBuilder| -> u32 {
@@ -169,7 +258,7 @@ pub fn build(nodes: &[AlleyNode], links: &[AlleyLink], graph: &GraphFile) -> (Al
                 b.node_lat.len() as u32 - 1
             })
         };
-        let (from, to) = (node_of(l.from, &mut b), node_of(l.to, &mut b));
+        let (from, to) = (node_of(lf, &mut b), node_of(lt, &mut b));
         let name = *names.entry(l.name.clone()).or_insert_with(|| {
             b.names.push(l.name.clone());
             b.names.len() as u32 - 1
@@ -205,14 +294,49 @@ pub fn build(nodes: &[AlleyNode], links: &[AlleyLink], graph: &GraphFile) -> (Al
             }
             continue;
         }
-        let n = new_node[&by_index[&(v as u32)]];
-        let Some(at) = n.at else { continue };
-        if let Some(&e) = n.on_link.and_then(|l| moct_edge.get(&l)) {
-            list.push((e, at as f32, PORTAL_OUT | PORTAL_IN));
-        }
-        if let Some(&e) = n.on_link_rev.and_then(|l| moct_edge.get(&l)) {
-            list.push((e, (1.0 - at) as f32, PORTAL_OUT | PORTAL_IN));
+        // 합쳐진 노드의 포털도 대표 노드에 모은다
+        let id = by_index[&(v as u32)];
+        for &member in members.get(&id).map_or(&[id][..], Vec::as_slice) {
+            let n = new_node[&member];
+            let Some(at) = n.at else { continue };
+            for (link, frac) in [(n.on_link, at), (n.on_link_rev, 1.0 - at)] {
+                if let Some(&e) = link.and_then(|l| moct_edge.get(&l))
+                    && !list.iter().any(|p| p.0 == e)
+                {
+                    list.push((e, frac as f32, PORTAL_OUT | PORTAL_IN));
+                }
+            }
         }
     }
-    (b, skipped)
+    (b, stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(id: u64, lat: f64, lon: f64) -> AlleyNode {
+        AlleyNode {
+            id,
+            lat,
+            lon,
+            on_link: None,
+            on_link_rev: None,
+            at: None,
+        }
+    }
+
+    #[test]
+    fn merge_nodes_within_join_distance() {
+        // 1과 2는 0.3m, 1과 3은 약 0.9m 떨어져 있다
+        let nodes = vec![
+            node(1, 37.5, 127.0),
+            node(2, 37.5 + 0.3 / 111_320.0, 127.0),
+            node(3, 37.5 + 0.9 / 111_320.0, 127.0),
+        ];
+        let merged = merge_nodes(&nodes);
+        assert_eq!(merged.get(&2), Some(&1));
+        assert!(!merged.contains_key(&1));
+        assert!(!merged.contains_key(&3));
+    }
 }

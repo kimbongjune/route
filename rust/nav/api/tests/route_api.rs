@@ -9,6 +9,11 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use nav_api::accident::index::AccidentIndex;
+use nav_api::caution::construction::ConstructionIndex;
+use nav_api::caution::enforce::EnforceTable;
+use nav_api::caution::risk::RiskStore;
+use nav_api::caution::section::{FOG_MATCH_M, ICING_MATCH_M, SectionIndex};
+use nav_api::caution::zone::ZoneIndex;
 use nav_api::collector::{self, Batch};
 use nav_api::guideline::GuideLineTable;
 use nav_api::route::toll::TollTable;
@@ -21,6 +26,11 @@ use tower::ServiceExt;
 
 const GRAPH_DIR: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\routedb";
 const GUIDE_LINE_FILE: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\유도선\유도선_노드.csv";
+const ICING_FILE: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\주의운전\결빙구간.csv";
+const FOG_FILE: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\주의운전\안개구간.csv";
+const ZONE_FILE: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\주의운전\보호구역.csv";
+const CAMERA_LINK_FILE: &str =
+    r"C:\Users\nocdu\Desktop\dev\route\maps\전국무인교통단속카메라표준데이터\카메라_링크.csv";
 const ACCIDENT_FILE: &str =
     r"C:\Users\nocdu\Desktop\dev\route\maps\전국교통사고다발지역표준데이터\사고다발_폴리곤.csv";
 const TOLL_DIR: &str = r"C:\Users\nocdu\Desktop\dev\route\maps\유료도로";
@@ -61,6 +71,21 @@ fn app_with_state() -> (Router, Arc<RouteDb>, AppState) {
         guide_lines: Arc::new(
             GuideLineTable::load(Path::new(GUIDE_LINE_FILE)).expect("유도선 파일을 읽지 못함"),
         ),
+        hazards: Arc::new(AccidentIndex::build(Vec::new(), Vec::new())),
+        icing: Arc::new(
+            SectionIndex::load(Path::new(ICING_FILE), ICING_MATCH_M)
+                .expect("결빙구간 파일을 읽지 못함"),
+        ),
+        fog: Arc::new(
+            SectionIndex::load(Path::new(FOG_FILE), FOG_MATCH_M)
+                .expect("안개구간 파일을 읽지 못함"),
+        ),
+        zones: Arc::new(ZoneIndex::load(Path::new(ZONE_FILE)).expect("보호구역 파일을 읽지 못함")),
+        enforce: Arc::new(
+            EnforceTable::load(Path::new(CAMERA_LINK_FILE)).expect("카메라_링크.csv를 읽지 못함"),
+        ),
+        risk: Arc::new(RiskStore::new()),
+        constructions: Arc::new(ConstructionIndex::build(Vec::new())),
         geocoder: Arc::new(
             GeocodeIndex::open(&dir.join("geocode.idx")).expect("지오코더 색인을 열지 못함"),
         ),
@@ -172,6 +197,15 @@ async fn short_route_uses_alleys_midway() {
     assert!(changes > 3, "골목·큰길 전환 {changes}번");
     let distance = data["distance_m"].as_f64().expect("distance_m");
     assert!(distance < 3_000.0, "{distance}");
+    // 골목에서 소월로로 나가는 곳과 골목으로 들어가고 나오는 곳에도 안내가 있다
+    let texts: Vec<&str> = data["instructions"]
+        .as_array()
+        .expect("instructions")
+        .iter()
+        .filter_map(|i| i["text"].as_str())
+        .collect();
+    assert_eq!(texts.first(), Some(&"우회전, 소월로"), "{texts:?}");
+    assert!(texts.contains(&"좌회전, 우사단로10길"), "{texts:?}");
 }
 
 #[tokio::test]
@@ -191,11 +225,11 @@ async fn route_requests() {
     assert_eq!(body["code"], "OK");
     let data = &body["data"];
     assert_eq!(data["profile"], "distance");
-    // 출발점은 서울역 앞 골목(골목 파일)이고 골목 2개를 지나 한강대로·퇴계로·소파로·삼일대로를 따라 가며 꺾이는 안내 지점이 없다
+    // 출발점은 서울역 앞 골목(골목 파일)이고 골목 2개를 지나 한강대로로 좌회전한 뒤 퇴계로·소파로·삼일대로를 따라 간다
     assert_eq!(data["links"].as_array().map(Vec::len), Some(79));
     assert_eq!(data["from"]["edge"], u32::MAX);
-    assert_eq!(data["steps"].as_array().map(Vec::len), Some(0));
-    assert_eq!(data["instructions"].as_array().map(Vec::len), Some(0));
+    assert_eq!(data["steps"].as_array().map(Vec::len), Some(1));
+    assert_eq!(data["instructions"][0]["text"], "좌회전, 한강대로");
     // 경고는 높이 제한이 맨 앞이고 거리 순서이다
     let warnings = data["warnings"].as_array().expect("warnings 배열");
     assert_eq!(warnings[0]["kind"], "height_limit");
@@ -218,7 +252,7 @@ async fn route_requests() {
         .collect();
     eprintln!("사고다발 구간 {}", Value::Array(summary));
 
-    // 서울역→강남역 최소시간 경로의 안내문은 안내 지점과 같은 수이고 첫 안내문은 퇴계로2가교차로 우회전이다
+    // 서울역→강남역 최소시간 경로의 안내문은 안내 지점과 같은 수이고 골목에서 한강대로로 나가는 좌회전 다음이 퇴계로2가교차로 우회전이다
     let (status, body) = send(
         &app,
         "POST",
@@ -231,10 +265,11 @@ async fn route_requests() {
     let instructions = body["data"]["instructions"]
         .as_array()
         .expect("instructions 배열");
-    assert_eq!((steps.len(), instructions.len()), (1, 1));
-    assert_eq!(steps[0]["turn"], "right");
+    assert_eq!((steps.len(), instructions.len()), (2, 2));
+    assert_eq!(instructions[0]["text"], "좌회전, 한강대로");
+    assert_eq!(steps[1]["turn"], "right");
     assert_eq!(
-        instructions[0]["text"],
+        instructions[1]["text"],
         "퇴계로2가교차로에서 우회전, 삼일대로"
     );
 

@@ -79,8 +79,8 @@ mod tests {
     fn read_poi_rows() {
         let cameras = read_cameras(&crate::paths::camera_links());
         let bumps = read_bumps(&crate::paths::bump_links());
-        assert_eq!(cameras.len(), 55_899);
-        assert_eq!(bumps.len(), 64_662);
+        assert_eq!(cameras.len(), 55_913);
+        assert_eq!(bumps.len(), 64_663);
         // 첫 카메라는 봉오대로 통행위반 단속, 링크 1670032800의 0.778 지점
         assert_eq!(
             (

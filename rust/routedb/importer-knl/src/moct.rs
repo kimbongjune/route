@@ -30,9 +30,28 @@ fn numeric_field(record: &Record, name: &str) -> Option<f64> {
     }
 }
 
+/// CP949 dbf를 연다. 표준노드링크는 판에 따라 cpg 파일(949)이 있기도 없기도 하여 인코딩을 지정한다
+fn dbf(path: &Path) -> shapefile::dbase::Reader<std::io::BufReader<std::fs::File>> {
+    shapefile::dbase::ReaderBuilder::new()
+        .with_encoding(shapefile::dbase::encoding::EncodingRs::from(
+            shapefile::dbase::encoding_rs::EUC_KR,
+        ))
+        .open(path)
+        .unwrap_or_else(|e| panic!("{}를 열 수 없음: {e}", path.display()))
+}
+
+/// shp와 CP949 dbf를 함께 연다
+fn shp(
+    path: &Path,
+) -> shapefile::Reader<std::io::BufReader<std::fs::File>, std::io::BufReader<std::fs::File>> {
+    let shape = shapefile::ShapeReader::from_path(path)
+        .unwrap_or_else(|e| panic!("{}를 열 수 없음: {e}", path.display()));
+    shapefile::Reader::new(shape, dbf(&path.with_extension("dbf")))
+}
+
 /// MOCT_NODE.shp에서 노드별 NODE_ID, TM 좌표(x, y), NODE_NAME을 추출한다.
 pub fn read_nodes(folder: &Path) -> Vec<Node> {
-    let mut reader = shapefile::Reader::from_path(folder.join("MOCT_NODE.shp")).unwrap();
+    let mut reader = shp(&folder.join("MOCT_NODE.shp"));
     let mut nodes = Vec::new();
     for result in reader.iter_shapes_and_records() {
         let (shape, record) = result.expect("레코드를 읽을 수 없음");
@@ -62,7 +81,7 @@ pub fn read_nodes(folder: &Path) -> Vec<Node> {
 
 /// MOCT_NODE.shp에서 노드별 NODE_ID와 NODE_TYPE을 추출한다.
 pub fn read_node_types(folder: &Path) -> Vec<(u64, u16)> {
-    let mut reader = shapefile::Reader::from_path(folder.join("MOCT_NODE.shp")).unwrap();
+    let mut reader = shp(&folder.join("MOCT_NODE.shp"));
     let mut nodes = Vec::new();
     for result in reader.iter_shapes_and_records() {
         let (_, record) = result.expect("레코드를 읽을 수 없음");
@@ -88,7 +107,7 @@ pub struct Turn {
 
 /// TURNINFO.dbf에서 회전정보별 ST_LINK, ED_LINK, TURN_TYPE을 추출한다.
 pub fn read_turns(folder: &Path) -> Vec<Turn> {
-    let mut reader = shapefile::dbase::Reader::from_path(folder.join("TURNINFO.dbf")).unwrap();
+    let mut reader = dbf(&folder.join("TURNINFO.dbf"));
     let mut turns = Vec::new();
     for result in reader.iter_records() {
         let record = result.expect("레코드를 읽을 수 없음");
@@ -113,7 +132,7 @@ pub fn read_turns(folder: &Path) -> Vec<Turn> {
 /// MOCT_LINK.shp에서 링크별 LINK_ID, F_NODE, T_NODE, LENGTH, TM 좌표 목록 (x, y), 통과제한 REST_VEH, REST_W, REST_H, 제한속도 MAX_SPD, 도로등급 ROAD_RANK, 도로명 ROAD_NAME, 연결로 여부 CONNECT를 추출한다.
 /// ROAD_USE=1 미사용 링크는 제외한다.
 pub fn read_links(folder: &Path) -> Vec<LinkInput> {
-    let mut reader = shapefile::Reader::from_path(folder.join("MOCT_LINK.shp")).unwrap();
+    let mut reader = shp(&folder.join("MOCT_LINK.shp"));
     let mut links = Vec::new();
     for result in reader.iter_shapes_and_records() {
         let (shape, record) = result.expect("레코드를 읽을 수 없음");
@@ -182,30 +201,30 @@ mod tests {
 
     #[test]
     fn count_moct_link_data() {
-        let real_count = 1_562_356;
+        let real_count = 1_564_022;
         let moct_link_data_file = crate::paths::moct_folder().join("MOCT_LINK.shp");
-        let moct_link_reader = shapefile::Reader::from_path(moct_link_data_file).unwrap();
+        let moct_link_reader = shp(&moct_link_data_file);
         assert_eq!(real_count, moct_link_reader.shape_count().unwrap());
     }
 
     #[test]
     fn count_moct_node_data() {
-        let real_count = 1_183_329;
+        let real_count = 1_184_340;
         let moct_node_data_file = crate::paths::moct_folder().join("MOCT_NODE.shp");
-        let moct_node_reader = shapefile::Reader::from_path(moct_node_data_file).unwrap();
+        let moct_node_reader = shp(&moct_node_data_file);
         assert_eq!(real_count, moct_node_reader.shape_count().unwrap());
     }
 
     #[test]
     fn check_korean_field_read() {
         let moct_link_data_file = crate::paths::moct_folder().join("MOCT_LINK.shp");
-        let mut moct_link_reader = shapefile::Reader::from_path(moct_link_data_file).unwrap();
+        let mut moct_link_reader = shp(&moct_link_data_file);
         let (_, record) = moct_link_reader
             .iter_shapes_and_records()
             .next()
             .unwrap()
             .unwrap();
-        assert_eq!(Some("1160059701"), text_field(&record, "LINK_ID"));
-        assert_eq!(Some("공원로"), text_field(&record, "ROAD_NAME"));
+        assert_eq!(Some("1520003903"), text_field(&record, "LINK_ID"));
+        assert_eq!(Some("신천대로"), text_field(&record, "ROAD_NAME"));
     }
 }

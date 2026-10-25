@@ -28,14 +28,16 @@ fn main() {
     );
     let graph = GraphFile::open(&paths::graph_file()).expect("moct.rdb를 열지 못함");
     let started = Instant::now();
-    let (builder, skipped) = alley::build(&nodes, &links, &graph);
+    let (builder, stats) = alley::build(&nodes, &links, &graph);
     let portals: usize = builder.portals.iter().map(Vec::len).sum();
     let portal_nodes = builder.portals.iter().filter(|p| !p.is_empty()).count();
     println!(
-        "골목 노드 {} 링크 {} 뺀 링크 {} 포털 노드 {} 포털 {} 이름 {} ({:.1}초)",
+        "골목 노드 {} 링크 {} 뺀 링크 {} 합친 노드 {} 겹친 링크 {} 포털 노드 {} 포털 {} 이름 {} ({:.1}초)",
         builder.node_lat.len(),
         builder.links.len(),
-        skipped,
+        stats.skipped,
+        stats.merged_nodes,
+        stats.duplicate_links,
         portal_nodes,
         portals,
         builder.names.len(),

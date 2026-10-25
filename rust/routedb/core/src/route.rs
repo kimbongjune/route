@@ -323,6 +323,8 @@ pub struct RoadSegment {
     pub to_m: f64,
     /// 구간의 링크 수
     pub links: usize,
+    /// 구간 첫 링크의 도로등급 ROAD_RANK. 골목은 108이다
+    pub rank: u8,
 }
 
 /// 간선 열의 도로명 번호와 지나는 길이를 받아 같은 도로명이 이어지는 구간으로 합친다.
@@ -1128,13 +1130,19 @@ impl RouteDb {
                 })
             })
             .collect();
+        let mut first_link = 0;
         let segments = merge_runs(&names, &parts)
             .into_iter()
-            .map(|(name, from_m, to_m, links)| RoadSegment {
-                name: file.name(name as usize).to_string(),
-                from_m,
-                to_m,
-                links,
+            .map(|(name, from_m, to_m, links)| {
+                let rank = file.road_rank()[edges[first_link] as usize];
+                first_link += links;
+                RoadSegment {
+                    name: file.name(name as usize).to_string(),
+                    from_m,
+                    to_m,
+                    links,
+                    rank,
+                }
             })
             .collect();
         veh.sort_unstable();

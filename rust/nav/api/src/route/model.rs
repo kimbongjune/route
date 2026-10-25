@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use super::guidance::{Instruction, Warning};
 use super::toll::TollFee;
 use crate::accident::model::AccidentSection;
+use crate::caution::zone::ZoneSection;
 
 /// 위경도. `heading`은 진행 방위각(진북 0, 시계 방향 0~360도)이며 출발지에서만 사용한다
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -33,6 +34,8 @@ pub struct RouteResponse {
     #[serde(flatten)]
     pub route: Route,
     pub accident_sections: Vec<AccidentSection>,
+    /// 어린이·노인·장애인 보호구역 구간
+    pub protect_zones: Vec<ZoneSection>,
     /// 1종 기준 통행료. 구간별 요금과 요금을 정하지 못한 영업소
     pub toll: TollFee,
     /// 안내 지점마다의 안내문. `steps`와 같은 순서

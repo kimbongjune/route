@@ -55,9 +55,25 @@ pub struct AccidentIndex {
 impl AccidentIndex {
     /// 사고다발_폴리곤.csv를 읽어 R-tree를 만든다
     pub fn load(path: &Path) -> io::Result<Self> {
-        let mut reader = csv::Reader::from_path(path)?;
+        Self::load_all(&[path])
+    }
+
+    /// 같은 컬럼의 폴리곤 CSV 여러 개(사고다발, TAAS 사고다발, 도로환경 위험요소)를 읽어 한 색인으로 만든다
+    pub fn load_all(paths: &[&Path]) -> io::Result<Self> {
         let mut zones = Vec::new();
         let mut polygons = Vec::new();
+        for path in paths {
+            Self::read(path, &mut zones, &mut polygons)?;
+        }
+        Ok(Self::build(zones, polygons))
+    }
+
+    fn read(
+        path: &Path,
+        zones: &mut Vec<AccidentZone>,
+        polygons: &mut Vec<Polygon<f64>>,
+    ) -> io::Result<()> {
+        let mut reader = csv::Reader::from_path(path)?;
         for row in reader.deserialize::<Row>() {
             let row = row.map_err(io::Error::other)?;
             let ring = parse_ring(&row.polygon).map_err(io::Error::other)?;
@@ -73,7 +89,7 @@ impl AccidentIndex {
             });
             polygons.push(ring);
         }
-        Ok(Self::build(zones, polygons))
+        Ok(())
     }
 
     /// 폴리곤 목록으로 색인을 만든다
@@ -198,7 +214,7 @@ fn bounding_box<'a>(coords: impl Iterator<Item = &'a Coord<f64>>) -> AABB<[f64; 
 }
 
 /// 좌표 열의 누적 거리. 위경도 차이를 미터로 바꾼 길이를 합하고 경로 거리에 비례하도록 맞춘다
-fn cumulative_m(geometry: &[(f64, f64)], distance_m: f64) -> Vec<f64> {
+pub(crate) fn cumulative_m(geometry: &[(f64, f64)], distance_m: f64) -> Vec<f64> {
     let mut cumulative = Vec::with_capacity(geometry.len());
     let mut total = 0.0;
     cumulative.push(0.0);

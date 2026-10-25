@@ -16,10 +16,10 @@ import pandas as pd
 import pyogrio
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tollroad"))
-from nodelink import tm_to_wgs84
+from nodelink import NODE_DIR, tm_to_wgs84
 
 ROOT = Path(__file__).resolve().parents[2]
-FOLDER = ROOT / "maps" / "[2026-09-14]NODELINKDATA"
+FOLDER = NODE_DIR
 PAIRS = int(sys.argv[1]) if len(sys.argv) > 1 else 300
 LOCAL = sys.argv[2] if len(sys.argv) > 2 else "http://127.0.0.1:3000"
 RANK_NAMES = {"101": "고속국도", "102": "도시고속", "103": "일반국도", "104": "특광역시도", "105": "국가지원지방도", "106": "지방도", "107": "시군도", "108": "기타"}

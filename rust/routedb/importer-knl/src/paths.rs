@@ -14,7 +14,7 @@ pub fn maps_dir() -> PathBuf {
 
 /// 표준노드링크 shp 폴더
 pub fn moct_folder() -> PathBuf {
-    maps_dir().join("[2026-09-14]NODELINKDATA")
+    maps_dir().join("[2026-10-14]NODELINKDATA")
 }
 
 /// 요금지점_링크.csv
