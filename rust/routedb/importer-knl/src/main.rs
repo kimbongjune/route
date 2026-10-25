@@ -1,3 +1,6 @@
+#[allow(dead_code)]
+mod alley;
+mod alley_mix;
 mod coord;
 mod moct;
 mod paths;
@@ -28,7 +31,7 @@ fn main() {
     // 힐베르트 순서로 정렬하고 TM 좌표를 위경도로 변환
     let tm = TmToWgs84::new();
     let points: Vec<(f64, f64)> = nodes.iter().map(|n| (n.x, n.y)).collect();
-    let ordered: Vec<NodeInput> = hilbert::sort_order(&points)
+    let mut ordered: Vec<NodeInput> = hilbert::sort_order(&points)
         .iter()
         .map(|&i| {
             let (lat, lon) = tm.convert(nodes[i].x, nodes[i].y);
@@ -39,13 +42,30 @@ fn main() {
         .collect();
 
     // 링크 좌표를 TM에서 위경도로 변환
-    let links: Vec<LinkInput> = links
+    let mut links: Vec<LinkInput> = links
         .into_iter()
         .map(|mut l| {
             l.geometry = l.geometry.iter().map(|&(x, y)| tm.convert(x, y)).collect();
             l
         })
         .collect();
+
+    // 골목 섞기 실험. ROUTE_ALLEY_MIX가 있을 때만 골목이 닿는 자리에서 링크를 나누고 골목 노드와 링크를 더한다
+    let (alley_nodes, alley_links) = alley_mix::read(&paths::alley_dir());
+    let mut splits = alley_mix::Splits::default();
+    if !alley_links.is_empty() {
+        splits = alley_mix::split_links(&mut links, &alley_nodes);
+        let (extra_nodes, extra_links) = alley_mix::inputs(&alley_nodes, &alley_links);
+        println!(
+            "골목 섞기 노드 {} 링크 {}(양방향 {}) 나눈 표준노드링크 {}",
+            extra_nodes.len(),
+            alley_links.len(),
+            extra_links.len(),
+            splits.len()
+        );
+        ordered.extend(extra_nodes);
+        links.extend(extra_links);
+    }
 
     let (mut graph, skipped) = Graph::build(&ordered, &links);
     println!(
@@ -73,6 +93,9 @@ fn main() {
     let mut pois = poi::read_cameras(&paths::camera_links());
     let cameras = pois.len();
     pois.extend(poi::read_bumps(&paths::bump_links()));
+    for p in pois.iter_mut() {
+        (p.link_id, p.at) = splits.locate(p.link_id, p.at);
+    }
     let missing = graph.set_pois(&pois);
     let poi_edges = (0..graph.edge_count())
         .filter(|&e| !graph.poi_range(e).is_empty())
@@ -108,7 +131,7 @@ fn main() {
         .collect();
     let rule = |t: &moct::Turn| {
         Some(TurnRule {
-            st: *edge_of.get(&t.st_link)?,
+            st: *edge_of.get(&splits.last(t.st_link))?,
             ed: *edge_of.get(&t.ed_link)?,
         })
     };
@@ -128,7 +151,7 @@ fn main() {
     let crossing: Vec<bool> = graph
         .node_id
         .iter()
-        .map(|id| node_types[id] == 101)
+        .map(|id| node_types.get(id).is_some_and(|&t| t == 101))
         .collect();
     // 회전 규칙마다 진입 링크 도착 노드에서 진출 링크 출발 노드까지 5개 이하 링크 경로를 찾아 한 그룹으로 묶는다
     let tail = linegraph::tails(&graph.first_out);

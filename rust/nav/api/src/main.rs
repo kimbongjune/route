@@ -1,7 +1,8 @@
 //! 내비 API 서버. 그래프 파일을 열어 `AppState`를 만들고 lib.rs의 `app`으로 라우터를 조립한다.
 //!
 //! cargo run --release -p nav-api -- [그래프 폴더] [주소] [사고다발 폴리곤 CSV] [유도선 CSV]
-//! 그래프 폴더는 moct.rdb, moct.cch-struct, moct.cch-metric, moct.cch-metric-time, moct.cch-metric-free와 지오코더 색인 geocode.idx가 있는 폴더이다.
+//! 그래프 폴더는 moct.rdb, moct.cch-struct, moct.cch-metric, moct.cch-metric-time, moct.cch-metric-free와 지오코더 색인 geocode.idx,
+//! 골목 파일 alley.rdb(없어도 됨)가 있는 폴더이다.
 //! 인자가 없으면 데이터 폴더(환경 변수 ROUTE_MAPS_DIR, 없으면 저장소의 maps) 아래의 기본 위치이고 주소는 NAV_ADDR, 없으면 127.0.0.1:3000이다.
 //! 정적 파일 폴더는 NAV_WEB_DIR, 없으면 저장소의 nav/web이다.
 //! 배경지도 타일용 브이월드 인증키는 환경 변수 VWORLD_API_KEY 또는 저장소 루트 .env의 VWORLD_API_KEY에서 읽는다.
@@ -36,9 +37,9 @@ fn maps_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_MAPS_DIR))
 }
 
-/// 그래프 폴더의 파일 다섯 개로 `RouteDb`를 연다
+/// 그래프 폴더의 파일 다섯 개로 `RouteDb`를 연다. 골목 파일 alley.rdb가 있으면 같이 연다
 pub fn open_route_db(dir: &Path) -> std::io::Result<RouteDb> {
-    RouteDb::open(
+    let db = RouteDb::open(
         &dir.join("moct.rdb"),
         &dir.join("moct.cch-struct"),
         [
@@ -46,7 +47,22 @@ pub fn open_route_db(dir: &Path) -> std::io::Result<RouteDb> {
             &dir.join("moct.cch-metric-time"),
             &dir.join("moct.cch-metric-free"),
         ],
-    )
+    )?;
+    let alley = dir.join("alley.rdb");
+    if alley.exists() {
+        let db = db.with_alleys(&alley)?;
+        if let Some(a) = db.alleys() {
+            println!(
+                "골목 파일 링크 {} 노드 {} 포털 {}",
+                a.link_count(),
+                a.node_count(),
+                a.portal_count()
+            );
+        }
+        return Ok(db);
+    }
+    println!("골목 파일이 없어 골목 없이 탐색함");
+    Ok(db)
 }
 
 /// 환경 변수에 없으면 .env 파일의 `이름=값` 줄에서 읽는다

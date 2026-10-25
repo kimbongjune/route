@@ -47,7 +47,9 @@ fn app_with_state() -> (Router, Arc<RouteDb>, AppState) {
             &dir.join("moct.cch-metric-free"),
         ],
     )
-    .expect("그래프 파일을 열지 못함");
+    .expect("그래프 파일을 열지 못함")
+    .with_alleys(&dir.join("alley.rdb"))
+    .expect("골목 파일을 열지 못함");
     let accidents =
         AccidentIndex::load(Path::new(ACCIDENT_FILE)).expect("사고다발 폴리곤 파일을 읽지 못함");
     let db = Arc::new(db);
@@ -110,14 +112,14 @@ fn heading_diff(a: f64, b: f64) -> f64 {
 #[tokio::test]
 async fn heading_picks_start_direction() {
     let app = app();
-    // 서울역 앞 한강대로는 중앙분리 도로라 남쪽·북쪽 방위각에 따라 출발 간선이 다르다
+    // 서울역 앞 한강대로 옆 골목은 남쪽·북쪽 방위각에 따라 골목을 지나는 방향이 달라 첫 링크가 다르다
     let mut first_links = Vec::new();
     for heading in [180.0, 0.0] {
         let (status, body) = send(
             &app,
             "POST",
             "/route",
-            json!({"from": {"lat": 37.5547, "lon": 126.9707, "heading": heading}, "to": {"lat": 37.4979, "lon": 127.0276}}),
+            json!({"from": {"lat": 37.5547, "lon": 126.9725, "heading": heading}, "to": {"lat": 37.4979, "lon": 127.0276}}),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -144,6 +146,35 @@ async fn heading_picks_start_direction() {
 }
 
 #[tokio::test]
+async fn short_route_uses_alleys_midway() {
+    let app = app();
+    // 용산구 소월로40길 71에서 대사관로6가길 42까지(직선 1.3km)는 큰길과 골목을 함께 탐색하여 가는 도중에도 골목을 지난다
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/route",
+        json!({"from": {"lat": 37.541945, "lon": 126.99276}, "to": {"lat": 37.532345, "lon": 127.000598}, "profile": "time"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let data = &body["data"];
+    assert_eq!(data["from"]["edge"], u32::MAX);
+    assert_eq!(data["to"]["edge"], u32::MAX);
+    // 골목 링크는 30,000,000,000 이상이다. 골목·큰길이 바뀌는 횟수가 3번보다 많으면 중간에 골목이 있다
+    let alley: Vec<bool> = data["links"]
+        .as_array()
+        .expect("links")
+        .iter()
+        .map(|l| l.as_u64().expect("LINK_ID") >= 30_000_000_000)
+        .collect();
+    let changes = alley.windows(2).filter(|w| w[0] != w[1]).count();
+    assert!(alley[0] && alley[alley.len() - 1]);
+    assert!(changes > 3, "골목·큰길 전환 {changes}번");
+    let distance = data["distance_m"].as_f64().expect("distance_m");
+    assert!(distance < 3_000.0, "{distance}");
+}
+
+#[tokio::test]
 async fn route_requests() {
     let app = app();
 
@@ -160,21 +191,15 @@ async fn route_requests() {
     assert_eq!(body["code"], "OK");
     let data = &body["data"];
     assert_eq!(data["profile"], "distance");
-    assert_eq!(data["links"].as_array().map(Vec::len), Some(104));
-    assert_eq!(data["steps"].as_array().map(Vec::len), Some(7));
-    assert_eq!(data["steps"][0]["turn"], "left");
-    assert_eq!(data["steps"][0]["to_name"], "한강대로77길");
-    // 안내문은 안내 지점과 같은 수이고 첫 안내문은 남영역앞교차로 좌회전이다
-    let instructions = data["instructions"].as_array().expect("instructions 배열");
-    assert_eq!(instructions.len(), 7);
-    assert_eq!(
-        instructions[0]["text"],
-        "남영역앞교차로에서 좌회전, 한강대로77길"
-    );
+    // 출발점은 서울역 앞 골목(골목 파일)이고 골목 2개를 지나 한강대로·퇴계로·소파로·삼일대로를 따라 가며 꺾이는 안내 지점이 없다
+    assert_eq!(data["links"].as_array().map(Vec::len), Some(79));
+    assert_eq!(data["from"]["edge"], u32::MAX);
+    assert_eq!(data["steps"].as_array().map(Vec::len), Some(0));
+    assert_eq!(data["instructions"].as_array().map(Vec::len), Some(0));
     // 경고는 높이 제한이 맨 앞이고 거리 순서이다
     let warnings = data["warnings"].as_array().expect("warnings 배열");
     assert_eq!(warnings[0]["kind"], "height_limit");
-    assert_eq!(warnings[0]["text"], "높이 제한 3.8m");
+    assert_eq!(warnings[0]["text"], "높이 제한 4.1m");
     let along: Vec<f64> = warnings.iter().filter_map(|w| w["at_m"].as_f64()).collect();
     assert!(along.windows(2).all(|p| p[0] <= p[1]));
     assert!(warnings.iter().any(|w| w["kind"] == "speed_camera"));
@@ -192,6 +217,26 @@ async fn route_requests() {
         .map(|s| json!({"kind": s["kind"], "from_m": s["from_m"], "to_m": s["to_m"], "zones": s["zones"].as_array().map(Vec::len)}))
         .collect();
     eprintln!("사고다발 구간 {}", Value::Array(summary));
+
+    // 서울역→강남역 최소시간 경로의 안내문은 안내 지점과 같은 수이고 첫 안내문은 퇴계로2가교차로 우회전이다
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/route",
+        json!({"from": {"lat": 37.5547, "lon": 126.9707}, "to": {"lat": 37.4979, "lon": 127.0276}, "profile": "time"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let steps = body["data"]["steps"].as_array().expect("steps 배열");
+    let instructions = body["data"]["instructions"]
+        .as_array()
+        .expect("instructions 배열");
+    assert_eq!((steps.len(), instructions.len()), (1, 1));
+    assert_eq!(steps[0]["turn"], "right");
+    assert_eq!(
+        instructions[0]["text"],
+        "퇴계로2가교차로에서 우회전, 삼일대로"
+    );
 
     // 서울역→부산역 최소시간 경로는 영업소 4곳을 지나고 통행료가 있다
     let (status, body) = send(
@@ -249,7 +294,7 @@ async fn route_requests() {
         "{texts:?}"
     );
     assert!(
-        texts.contains(&"반포IC에서 오른쪽 출구, 경부고속도로 방면"),
+        texts.contains(&"한남IC에서 오른쪽 출구, 경부고속도로 방면"),
         "{texts:?}"
     );
 
@@ -332,9 +377,15 @@ async fn weight_updates_change_route() {
     assert!(!after_links.contains(&blocked));
     assert_ne!(after_links, links);
 
-    // 통제를 풀고 모든 경로 링크의 속도 배율을 2로 하면 시간이 늘어난다. 거리 프로파일은 그대로이다
+    // 통제를 풀고 모든 경로 링크의 속도 배율을 2로 하면 시간이 늘어난다. 거리 프로파일은 그대로이다.
+    // 골목 링크는 큰길 그래프에 없어 배율을 바꾸지 않는다
     db.reset_weights();
-    let updates: Vec<WeightUpdate> = links
+    let road_links: Vec<u64> = links
+        .iter()
+        .copied()
+        .filter(|&l| db.edge_of_link(l).is_some())
+        .collect();
+    let updates: Vec<WeightUpdate> = road_links
         .iter()
         .map(|&link_id| WeightUpdate {
             link_id,
@@ -343,10 +394,10 @@ async fn weight_updates_change_route() {
         })
         .collect();
     let report = db.update_weights(&updates);
-    assert_eq!((report.applied, report.blocked), (links.len(), 0));
+    assert_eq!((report.applied, report.blocked), (road_links.len(), 0));
     eprintln!(
         "update_weights 속도 배율 {}건 {:.0}ms",
-        links.len(),
+        road_links.len(),
         report.elapsed_ms
     );
     let (_, slow) = send(&app, "POST", "/route", body.clone()).await;
@@ -358,10 +409,7 @@ async fn weight_updates_change_route() {
         json!({"from": {"lat": 37.5547, "lon": 126.9707}, "to": {"lat": 37.4979, "lon": 127.0276}}),
     )
     .await;
-    assert_eq!(
-        distance["data"]["links"].as_array().map(Vec::len),
-        Some(104)
-    );
+    assert_eq!(distance["data"]["links"].as_array().map(Vec::len), Some(79));
 
     // 되돌리면 처음 경로와 같다
     db.reset_weights();

@@ -37,6 +37,18 @@ pub fn bump_links() -> PathBuf {
         .join("과속방지턱_링크.csv")
 }
 
+/// 골목 입력 CSV 폴더. 시도별 하위 폴더에 노드·링크 CSV가 있다
+#[allow(dead_code)]
+pub fn alley_dir() -> PathBuf {
+    maps_dir().join("골목")
+}
+
+/// 골목 파일 alley.rdb
+#[allow(dead_code)]
+pub fn alley_file() -> PathBuf {
+    routedb_dir().join("alley.rdb")
+}
+
 /// 그래프 파일과 CCH 파일을 저장하는 폴더
 pub fn routedb_dir() -> PathBuf {
     maps_dir().join("routedb")

@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use axum::Router;
 use axum::http::Uri;
 use axum::http::{HeaderValue, header};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use tower::ServiceBuilder;
 use tower_http::services::ServeDir;
@@ -48,7 +49,16 @@ pub fn app(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// 등록되지 않은 주소. 404 NOT_FOUND
-async fn not_found(uri: Uri) -> AppError {
-    AppError::NotFound(uri.path().to_string())
+/// 등록되지 않은 주소. 404 NOT_FOUND. 글리프 PBF는 없는 범위이면 빈 PBF를 준다.
+/// MapLibre는 라벨 글자의 범위 파일이 404이면 그 타일의 레이어를 그리지 않으므로 글자만 빠지게 한다
+async fn not_found(uri: Uri) -> Response {
+    let path = uri.path();
+    if path.starts_with("/fonts/") && path.ends_with(".pbf") {
+        return (
+            [(header::CONTENT_TYPE, "application/x-protobuf")],
+            Vec::<u8>::new(),
+        )
+            .into_response();
+    }
+    AppError::NotFound(path.to_string()).into_response()
 }

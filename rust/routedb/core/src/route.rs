@@ -8,10 +8,12 @@ use cch::bundle::{CchBundle, CchView, MetricBundle, MetricView};
 use cch::path::PathQuery;
 use cch::{Cch, Metric};
 
+use crate::alley::{AlleyFile, PORTAL_IN, PORTAL_OUT};
 use crate::file::GraphFile;
 use crate::hierarchy;
 use crate::linegraph;
 use crate::profile::{self, ProfileInput};
+use crate::route_alley::{alley_factor, reverse_pieces};
 use crate::snap::{LinkIndex, Snap};
 use serde::{Deserialize, Serialize};
 
@@ -447,6 +449,8 @@ pub struct RouteDb {
     factors: RwLock<(Vec<f32>, Vec<f32>)>,
     /// LINK_ID에서 간선 번호
     edge_of_link: HashMap<u64, u32>,
+    /// 골목 파일. 없으면 골목 없이 탐색한다
+    pub(crate) alleys: Option<AlleyFile>,
 }
 
 /// 경로 탐색기. CCH 쿼리 버퍼를 갖고 있어 여러 경로에 재사용한다.
@@ -454,14 +458,16 @@ pub struct Router<'a> {
     db: &'a RouteDb,
     metrics: &'a Metrics,
     query: PathQuery<'a>,
+    /// 출발·도착이 가까우면 큰길과 골목을 함께 탐색한다(route_local.rs). 대안경로 탐색에서는 끈다
+    pub local: bool,
 }
 
 /// 좌표 목록의 평면 길이(m)
-fn planar_length(points: &[(f64, f64)]) -> f64 {
+pub(crate) fn planar_length(points: &[(f64, f64)]) -> f64 {
     points.windows(2).map(|w| planar_distance(w[0], w[1])).sum()
 }
 
-fn planar_distance(a: (f64, f64), b: (f64, f64)) -> f64 {
+pub(crate) fn planar_distance(a: (f64, f64), b: (f64, f64)) -> f64 {
     let dy = (b.0 - a.0) * 111_320.0;
     let dx = (b.1 - a.1) * 111_320.0 * 0.809_017;
     (dx * dx + dy * dy).sqrt()
@@ -539,6 +545,7 @@ impl RouteDb {
             base_metrics,
             factors: RwLock::new(factors),
             edge_of_link,
+            alleys: None,
         })
     }
 
@@ -590,6 +597,7 @@ impl RouteDb {
             db: self,
             metrics,
             query: PathQuery::new(cch_view),
+            local: true,
         }
     }
 
@@ -820,6 +828,7 @@ impl RouteDb {
                 sources: [Arc::clone(&metric), Arc::clone(&metric), metric],
             };
             let mut router = self.router(&cch_view, &metrics);
+            router.local = false;
             let Some(route) = router.route_with_heading(from, from_heading, to, base.profile)
             else {
                 break;
@@ -883,9 +892,41 @@ impl Router<'_> {
             }
         }
         let tos = db.index.nearest_n(to.0, to.1, 5);
-        let mut best: Option<(Snap, Snap, f64, Vec<u32>)> = None;
-        for from in &froms {
-            for to in &tos {
+        // 출발·도착이 가까우면 큰길과 골목을 함께 탐색한 경로를 쓴다
+        if self.local
+            && let Some(route) = db.local_route(profile, from, from_heading, &froms, to, &tos)
+        {
+            return Some(route);
+        }
+        // 큰길보다 골목에 가까우면 골목망의 포털을 출발·도착 후보로 한다
+        let factor = alley_factor(profile);
+        let nearest = |snaps: &[Snap]| {
+            snaps
+                .iter()
+                .map(|s| s.distance_m)
+                .fold(f64::INFINITY, f64::min)
+        };
+        let from_alley = db.alley_end(from, nearest(&froms), PORTAL_OUT, factor, from_heading);
+        let to_alley = db.alley_end(to, nearest(&tos), PORTAL_IN, factor, None);
+        let from_cands: Vec<(Snap, &[crate::alley::Piece])> = match &from_alley {
+            Some(a) => a
+                .candidates
+                .iter()
+                .map(|(s, p)| (s.clone(), p.as_slice()))
+                .collect(),
+            None => froms.into_iter().map(|s| (s, &[][..])).collect(),
+        };
+        let to_cands: Vec<(Snap, &[crate::alley::Piece])> = match &to_alley {
+            Some(a) => a
+                .candidates
+                .iter()
+                .map(|(s, p)| (s.clone(), p.as_slice()))
+                .collect(),
+            None => tos.into_iter().map(|s| (s, &[][..])).collect(),
+        };
+        let mut best: Option<(usize, usize, f64, Vec<u32>, f64)> = None;
+        for (i, (from, _)) in from_cands.iter().enumerate() {
+            for (j, (to, _)) in to_cands.iter().enumerate() {
                 let (from_frac, to_frac) = (db.fraction(from), db.fraction(to));
                 let found = if from.edge == to.edge && from_frac <= to_frac {
                     Some((
@@ -919,17 +960,36 @@ impl Router<'_> {
                 };
                 if let Some((total, edges)) = found {
                     let cost = from.distance_m + total + to.distance_m;
-                    if best
-                        .as_ref()
-                        .is_none_or(|b| cost < b.0.distance_m + b.2 + b.1.distance_m)
-                    {
-                        best = Some((from.clone(), to.clone(), total, edges));
+                    if best.as_ref().is_none_or(|b| cost < b.4) {
+                        best = Some((i, j, total, edges, cost));
                     }
                 }
             }
         }
-        let (from, to, distance_m, edges) = best?;
-        Some(db.build(profile, from, to, distance_m, &edges))
+        // 출발과 도착이 같은 골목망 안이면 골목만 지나는 경로와 비교한다
+        if let (Some(fa), Some(ta)) = (&from_alley, &to_alley)
+            && let Some((len, pieces)) = db.alley_only(fa, ta)
+        {
+            let cost = fa.snap.distance_m + len * factor + ta.snap.distance_m;
+            if best.as_ref().is_none_or(|b| cost < b.4) {
+                return Some(db.alley_route(profile, fa, ta, &pieces));
+            }
+        }
+        let (i, j, distance_m, edges, _) = best?;
+        let route = db.build(
+            profile,
+            from_cands[i].0.clone(),
+            to_cands[j].0.clone(),
+            distance_m,
+            &edges,
+        );
+        Some(db.splice(
+            route,
+            from_cands[i].1,
+            &reverse_pieces(to_cands[j].1),
+            from_alley.as_ref().map(|a| &a.snap),
+            to_alley.as_ref().map(|a| &a.snap),
+        ))
     }
 }
 

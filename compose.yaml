@@ -1,6 +1,7 @@
 # docker compose up                       내비 API, PostGIS, GeoServer
 # docker compose run --rm importer        그래프 파일과 CCH 생성(배치, 실행 후 종료)
 # docker compose run --rm importer importer-geocode   지오코더 색인 생성
+# docker compose run --rm importer importer-alley     골목 파일 생성(그래프 파일 다음에 실행)
 # docker compose run --rm loader [시도 폴더명...]      전자지도를 PostGIS에 적재(없으면 전국)
 services:
   api:

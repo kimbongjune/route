@@ -1,3 +1,4 @@
+pub mod alley;
 pub mod astar;
 pub mod dijkstra;
 pub mod file;
@@ -7,4 +8,6 @@ pub mod hilbert;
 pub mod linegraph;
 pub mod profile;
 pub mod route;
+pub mod route_alley;
+pub mod route_local;
 pub mod snap;

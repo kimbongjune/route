@@ -1,4 +1,4 @@
-# 빌드 단계. 워크스페이스에서 nav-api, importer-knl, importer-geocode만 release로 빌드한다
+# 빌드 단계. 워크스페이스에서 nav-api, importer-knl, importer-alley, importer-geocode만 release로 빌드한다
 FROM rust:1.98-bookworm AS builder
 WORKDIR /app
 COPY rust/ rust/
@@ -21,5 +21,6 @@ CMD ["nav-api"]
 FROM debian:bookworm-slim AS importer
 COPY --from=builder /app/rust/target/release/importer-knl /usr/local/bin/importer-knl
 COPY --from=builder /app/rust/target/release/importer-geocode /usr/local/bin/importer-geocode
+COPY --from=builder /app/rust/target/release/importer-alley /usr/local/bin/importer-alley
 ENV ROUTE_MAPS_DIR=/maps
 CMD ["importer-knl"]
