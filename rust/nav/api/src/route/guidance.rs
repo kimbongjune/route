@@ -8,6 +8,7 @@ use super::toll::{StopKind, TollFee};
 use crate::accident::model::AccidentSection;
 use crate::caution::construction::ConstructionHit;
 use crate::caution::enforce::EnforceSection;
+use crate::caution::rest::RestHit;
 use crate::caution::risk::{RiskHit, element_text, grade_text};
 use crate::caution::section::CautionSection;
 use crate::caution::zone::{ZoneKind, ZoneSection};
@@ -55,6 +56,8 @@ pub enum WarningKind {
     RoadRisk,
     /// 공사 지점
     Construction,
+    /// 고속도로 휴게소
+    RestArea,
     /// 어린이보호구역
     SchoolZone,
     /// 노인보호구역
@@ -184,6 +187,7 @@ pub struct Cautions<'a> {
     pub enforce_sections: &'a [EnforceSection],
     pub risks: &'a [RiskHit],
     pub constructions: &'a [ConstructionHit],
+    pub rest_areas: &'a [RestHit],
 }
 
 /// 경로 위 경고를 거리 순서로 만든다. 경로 전체에 해당하는 통과제한은 맨 앞이다.
@@ -328,6 +332,27 @@ pub fn warnings(route: &Route, cautions: &Cautions, toll: &TollFee) -> Vec<Warni
         }
         along.push(Warning {
             kind: WarningKind::Construction,
+            at_m: Some(hit.at_m),
+            to_m: None,
+            text,
+        });
+    }
+    for hit in cautions.rest_areas {
+        let r = &hit.rest;
+        let mut extra = Vec::new();
+        if r.gas {
+            extra.push("주유소".to_string());
+        }
+        if !r.convenience.is_empty() {
+            extra.push(r.convenience.clone());
+        }
+        let text = if extra.is_empty() {
+            format!("휴게소: {}", r.name)
+        } else {
+            format!("휴게소: {} ({})", r.name, extra.join(", "))
+        };
+        along.push(Warning {
+            kind: WarningKind::RestArea,
             at_m: Some(hit.at_m),
             to_m: None,
             text,

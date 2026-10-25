@@ -3,6 +3,7 @@
 
 pub mod construction;
 pub mod enforce;
+pub mod rest;
 pub mod risk;
 pub mod section;
 pub mod zone;

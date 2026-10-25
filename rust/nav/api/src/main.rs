@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use nav_api::accident::index::AccidentIndex;
 use nav_api::caution::construction::ConstructionIndex;
 use nav_api::caution::enforce::EnforceTable;
+use nav_api::caution::rest::RestAreaIndex;
 use nav_api::caution::risk::{self, RiskStore};
 use nav_api::caution::section::{FOG_MATCH_M, ICING_MATCH_M, SectionIndex};
 use nav_api::caution::zone::ZoneIndex;
@@ -183,6 +184,14 @@ async fn main() {
         ConstructionIndex::build(Vec::new())
     };
     println!("공사 지점 {}곳", constructions.len());
+    // 휴게소. scripts/caution/build_rest_areas.py로 만든 파일이 없으면 휴게소 안내 없이 실행한다
+    let rest_file = maps.join("유료도로").join("휴게소.csv");
+    let rest_areas = if rest_file.exists() {
+        RestAreaIndex::load(&rest_file).expect("휴게소 파일을 읽지 못함")
+    } else {
+        RestAreaIndex::build(Vec::new())
+    };
+    println!("휴게소 {}곳", rest_areas.len());
 
     let toll_dir = maps.join("유료도로");
     let tolls = TollTable::load(&toll_dir.join("영업소.csv"), &toll_dir.join("요금표.csv"))
@@ -262,6 +271,7 @@ async fn main() {
         enforce: Arc::new(enforce),
         risk,
         constructions: Arc::new(constructions),
+        rest_areas: Arc::new(rest_areas),
         geocoder: Arc::new(geocoder),
         tolls: Arc::new(tolls),
         http,

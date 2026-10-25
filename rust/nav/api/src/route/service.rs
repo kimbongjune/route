@@ -71,6 +71,9 @@ fn decorate(mut route: Route, extras: &RouteExtras, elapsed_ms: f64) -> RouteRes
         })
         .collect();
     let enforce_sections = extras.enforce.sections(&route.pois);
+    let rest_areas = extras
+        .rest_areas
+        .hits(&route.geometry, route.distance_m, &expressway);
     let risks = extras.risk.hits(&route.geometry, route.distance_m);
     let constructions =
         extras
@@ -87,6 +90,7 @@ fn decorate(mut route: Route, extras: &RouteExtras, elapsed_ms: f64) -> RouteRes
         enforce_sections: &enforce_sections,
         risks: &risks,
         constructions: &constructions,
+        rest_areas: &rest_areas,
     };
     let warnings = guidance::warnings(&route, &cautions, &toll);
     RouteResponse {

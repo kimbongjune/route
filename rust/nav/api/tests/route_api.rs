@@ -11,6 +11,7 @@ use http_body_util::BodyExt;
 use nav_api::accident::index::AccidentIndex;
 use nav_api::caution::construction::ConstructionIndex;
 use nav_api::caution::enforce::EnforceTable;
+use nav_api::caution::rest::RestAreaIndex;
 use nav_api::caution::risk::RiskStore;
 use nav_api::caution::section::{FOG_MATCH_M, ICING_MATCH_M, SectionIndex};
 use nav_api::caution::zone::ZoneIndex;
@@ -86,6 +87,7 @@ fn app_with_state() -> (Router, Arc<RouteDb>, AppState) {
         ),
         risk: Arc::new(RiskStore::new()),
         constructions: Arc::new(ConstructionIndex::build(Vec::new())),
+        rest_areas: Arc::new(RestAreaIndex::build(Vec::new())),
         geocoder: Arc::new(
             GeocodeIndex::open(&dir.join("geocode.idx")).expect("지오코더 색인을 열지 못함"),
         ),

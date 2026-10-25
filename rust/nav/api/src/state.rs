@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 use crate::accident::index::AccidentIndex;
 use crate::caution::construction::ConstructionIndex;
 use crate::caution::enforce::EnforceTable;
+use crate::caution::rest::RestAreaIndex;
 use crate::caution::risk::RiskStore;
 use crate::caution::section::SectionIndex;
 use crate::caution::zone::ZoneIndex;
@@ -37,6 +38,8 @@ pub struct AppState {
     pub risk: Arc<RiskStore>,
     /// 공사 지점(UTIC TCS 공사정보 중 위치를 찾은 것)
     pub constructions: Arc<ConstructionIndex>,
+    /// 고속도로 휴게소
+    pub rest_areas: Arc<RestAreaIndex>,
     /// 지오코더 색인
     pub geocoder: Arc<GeocodeIndex>,
     /// 통행료 영업소·요금표
@@ -66,6 +69,7 @@ pub struct RouteExtras {
     pub enforce: Arc<EnforceTable>,
     pub risk: Arc<RiskStore>,
     pub constructions: Arc<ConstructionIndex>,
+    pub rest_areas: Arc<RestAreaIndex>,
 }
 
 impl AppState {
@@ -81,6 +85,7 @@ impl AppState {
             enforce: Arc::clone(&self.enforce),
             risk: Arc::clone(&self.risk),
             constructions: Arc::clone(&self.constructions),
+            rest_areas: Arc::clone(&self.rest_areas),
         }
     }
 }
