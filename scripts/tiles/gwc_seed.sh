@@ -9,7 +9,7 @@ GS=http://127.0.0.1:8080/geoserver
 PW=$(grep '^GEOSERVER_ADMIN_PASSWORD=' .env | cut -d= -f2-)
 THREADS=4
 # 레이어:줌 시작:줌 끝
-DEFAULT="v_sig:6:12 v_emd:10:14 v_road_major:7:12 v_road:10:14 v_rw:13:14 v_buld:14:15"
+DEFAULT="v_sig:6:12 v_emd:10:14 v_rw:13:14 v_buld:14:15 v_water_low:6:11 v_water:12:13 v_station:12:13 v_forest_low:11:12 v_link_z7:7:9 v_link_low:10:11 v_link:12:13 v_rail2:8:13 v_subway:9:13"
 
 seed() {
   curl -s -o /dev/null -w "seed $1 z$2-$3 -> %{http_code}\n" -u "admin:$PW" -X POST -H "Content-Type: application/json" \

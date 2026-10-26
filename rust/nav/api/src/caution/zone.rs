@@ -12,6 +12,8 @@ use crate::accident::index::cumulative_m;
 
 /// 보호구역 반경(m)
 pub const ZONE_RADIUS_M: f64 = 300.0;
+/// 어린이보호구역 제한속도(km/h). 표준데이터에 제한속도 컬럼이 없어 시간대 구분 없이 사용한다
+pub const SCHOOL_ZONE_KMH: f64 = 30.0;
 
 /// 보호구역 종류
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -207,6 +209,20 @@ impl ZoneIndex {
     }
 }
 
+/// 경로가 지나는 어린이보호구역 구간 sections에서 SCHOOL_ZONE_KMH보다 빠른 링크 부분을 SCHOOL_ZONE_KMH로 지날 때 늘어나는 시간(초)
+pub fn school_delay_s(speeds: &[routedb_core::route::SpeedSpan], sections: &[(f64, f64)]) -> f64 {
+    let mut delay = 0.0;
+    for s in speeds.iter().filter(|s| s.kmh > SCHOOL_ZONE_KMH) {
+        for &(a, b) in sections {
+            let overlap = s.to_m.min(b) - s.from_m.max(a);
+            if overlap > 0.0 {
+                delay += overlap / (SCHOOL_ZONE_KMH / 3.6) - overlap / (s.kmh / 3.6);
+            }
+        }
+    }
+    delay
+}
+
 /// 보호구역 구간에서 excluded 구간(고속국도·도시고속국도 등)과 겹치는 부분을 뺀다. 남는 조각이 1m 미만이면 버린다
 pub fn excluding(sections: Vec<ZoneSection>, excluded: &[(f64, f64)]) -> Vec<ZoneSection> {
     let mut out = Vec::new();
@@ -248,6 +264,28 @@ pub fn excluding(sections: Vec<ZoneSection>, excluded: &[(f64, f64)]) -> Vec<Zon
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn school_zone_delay() {
+        use routedb_core::route::SpeedSpan;
+        // 0~500m는 60km/h, 500~1,000m는 20km/h이고 어린이보호구역은 300~700m이다.
+        // 60km/h 부분 200m만 30km/h로 늘어나 24초 - 12초 = 12초가 더해진다
+        let speeds = [
+            SpeedSpan {
+                from_m: 0.0,
+                to_m: 500.0,
+                kmh: 60.0,
+            },
+            SpeedSpan {
+                from_m: 500.0,
+                to_m: 1_000.0,
+                kmh: 20.0,
+            },
+        ];
+        let delay = school_delay_s(&speeds, &[(300.0, 700.0)]);
+        assert!((delay - 12.0).abs() < 1e-9, "{delay}");
+        assert_eq!(school_delay_s(&speeds, &[]), 0.0);
+    }
 
     fn zone(kind: ZoneKind, name: &str, lat: f64, lon: f64, limit: Option<u8>) -> ProtectZone {
         ProtectZone {

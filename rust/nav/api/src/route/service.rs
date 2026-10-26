@@ -8,6 +8,7 @@ use routedb_core::route::{Profile, Route, RouteDb, Section};
 use super::guidance;
 use super::model::{Candidate, LatLon, RouteRequest, RouteResponse, RoutesResponse};
 use crate::caution::construction;
+use crate::caution::disaster;
 use crate::caution::zone::{self, ZoneKind};
 use crate::error::AppError;
 use crate::state::RouteExtras;
@@ -70,11 +71,30 @@ fn decorate(mut route: Route, extras: &RouteExtras, elapsed_ms: f64) -> RouteRes
             to_m: z.to_m,
         })
         .collect();
+    // 어린이보호구역 구간은 30km/h보다 빠르게 지나지 않는 것으로 시간을 계산한다
+    let school: Vec<(f64, f64)> = route
+        .school_zones
+        .iter()
+        .map(|s| (s.from_m, s.to_m))
+        .collect();
+    route.duration_s += zone::school_delay_s(&route.speeds, &school);
     let enforce_sections = extras.enforce.sections(&route.pois);
     let rest_areas = extras
         .rest_areas
         .hits(&route.geometry, route.distance_m, &expressway);
     let risks = extras.risk.hits(&route.geometry, route.distance_m);
+    let notices = extras
+        .notices
+        .hits(&route.links, &route.geometry, route.distance_m);
+    let incidents = extras
+        .incidents
+        .hits(&route.links, &route.geometry, route.distance_m);
+    let disasters = extras.disasters.hits(
+        &route.links,
+        &route.geometry,
+        route.distance_m,
+        &disaster::now_kst(),
+    );
     let constructions =
         extras
             .constructions
@@ -91,6 +111,9 @@ fn decorate(mut route: Route, extras: &RouteExtras, elapsed_ms: f64) -> RouteRes
         risks: &risks,
         constructions: &constructions,
         rest_areas: &rest_areas,
+        notices: &notices,
+        disasters: &disasters,
+        incidents: &incidents,
     };
     let warnings = guidance::warnings(&route, &cautions, &toll);
     RouteResponse {

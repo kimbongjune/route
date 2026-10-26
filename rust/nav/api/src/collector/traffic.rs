@@ -192,7 +192,8 @@ pub async fn poll_once(
     report
 }
 
-/// 폴링 태스크. `interval`마다 `poll_once`를 실행한다. 타일이 모두 실패한 폴링이 STALE_POLLS 번 이어지면 속도 배율을 되돌린다
+/// 폴링 태스크. `interval`마다 `poll_once`를 실행한다. 타일이 모두 실패했거나 받은 링크가 0개인 폴링이 STALE_POLLS 번 이어지면
+/// 속도 배율을 되돌린다. 국가교통정보센터가 성공 코드와 빈 목록을 주는 때가 있어(2026-10-26 19시 50분) 0개는 실패로 센다
 pub async fn run(
     http: reqwest::Client,
     key: String,
@@ -206,7 +207,7 @@ pub async fn run(
         ticker.tick().await;
         let report = poll_once(&http, &key, &db, &updates).await;
         let now = Instant::now();
-        if report.failed_tiles < report.tiles {
+        if report.failed_tiles < report.tiles && report.items > 0 {
             fresh.succeeded(now);
         } else if fresh.failed(now, interval) {
             println!("소통정보를 오래 받지 못해 속도 배율을 되돌림");

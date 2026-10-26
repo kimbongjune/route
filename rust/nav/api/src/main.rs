@@ -17,7 +17,10 @@ use std::time::{Duration, Instant};
 
 use nav_api::accident::index::AccidentIndex;
 use nav_api::caution::construction::ConstructionIndex;
+use nav_api::caution::disaster::{self, DisasterStore};
 use nav_api::caution::enforce::EnforceTable;
+use nav_api::caution::incident::IncidentStore;
+use nav_api::caution::notice::{self, NoticeStore};
 use nav_api::caution::rest::RestAreaIndex;
 use nav_api::caution::risk::{self, RiskStore};
 use nav_api::caution::section::{FOG_MATCH_M, ICING_MATCH_M, SectionIndex};
@@ -230,6 +233,33 @@ async fn main() {
         }
         None => println!("UTIC_API_KEY가 없어 도로위험상황예보를 받지 않음"),
     }
+    // 주의운전구간 메시지와 재난상황정보. ITS 키가 있으면 NOTICE_POLL_SECS(없으면 300초), DISASTER_POLL_SECS(없으면 3,600초)마다 받는다
+    let notices = Arc::new(NoticeStore::new());
+    let disasters = Arc::new(DisasterStore::new());
+    match env_value("ITS_API_KEY") {
+        Some(key) => {
+            let notice_secs: u64 = env_value("NOTICE_POLL_SECS")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(300);
+            let disaster_secs: u64 = env_value("DISASTER_POLL_SECS")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3_600);
+            println!("주의운전구간 폴링 {notice_secs}초, 재난상황정보 폴링 {disaster_secs}초 간격");
+            tokio::spawn(notice::run(
+                http.clone(),
+                key.clone(),
+                Arc::clone(&notices),
+                Duration::from_secs(notice_secs),
+            ));
+            tokio::spawn(disaster::run(
+                http.clone(),
+                key,
+                Arc::clone(&disasters),
+                Duration::from_secs(disaster_secs),
+            ));
+        }
+        None => println!("ITS_API_KEY가 없어 주의운전구간·재난상황정보를 받지 않음"),
+    }
     let (events, _) = broadcast::channel(64);
     let updates = collector::start(Arc::clone(&db), events.clone());
     let poll_secs: Option<u64> = env_value("TRAFFIC_POLL_SECS").and_then(|v| v.parse().ok());
@@ -246,15 +276,27 @@ async fn main() {
         }
         _ => println!("ITS_API_KEY 또는 TRAFFIC_POLL_SECS가 없어 소통정보 폴링을 하지 않음"),
     }
+    // 돌발정보. UTIC 키가 있으면 UTIC 돌발정보도 함께 받는다. UTIC 키는 등록 IP 대역에서만 동작한다
+    let incidents = Arc::new(IncidentStore::new());
     let incident_secs: Option<u64> = env_value("INCIDENT_POLL_SECS").and_then(|v| v.parse().ok());
     match (env_value("ITS_API_KEY"), incident_secs) {
         (Some(its_key), Some(secs)) => {
-            println!("돌발정보 폴링 {secs}초 간격");
+            let utic_key = env_value("UTIC_API_KEY");
+            println!(
+                "돌발정보 폴링 {secs}초 간격{}",
+                if utic_key.is_some() {
+                    ", UTIC 돌발정보 포함"
+                } else {
+                    ""
+                }
+            );
             tokio::spawn(collector::incident::run(
                 http.clone(),
                 its_key,
+                utic_key,
                 Arc::clone(&db),
                 updates.clone(),
+                Arc::clone(&incidents),
                 Duration::from_secs(secs),
             ));
         }
@@ -272,6 +314,9 @@ async fn main() {
         risk,
         constructions: Arc::new(constructions),
         rest_areas: Arc::new(rest_areas),
+        notices,
+        disasters,
+        incidents,
         geocoder: Arc::new(geocoder),
         tolls: Arc::new(tolls),
         http,
@@ -280,6 +325,11 @@ async fn main() {
         updates,
         events,
     });
+    // 산 음영용 Terrarium 높이 타일. scripts/tiles/build_terrain.sh로 만든 maps/배경지도/terrain을 /terrain/{z}/{x}/{y}.png로 준다
+    let app = app.nest_service(
+        "/terrain",
+        tower_http::services::ServeDir::new(maps.join("배경지도").join("terrain")),
+    );
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("주소에 바인드하지 못함");

@@ -4,6 +4,7 @@
 pub mod handler;
 pub mod incident;
 pub mod traffic;
+pub mod utic;
 
 use std::convert::Infallible;
 use std::sync::Arc;

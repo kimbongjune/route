@@ -20,6 +20,8 @@ const LOCAL_MARGIN_DEG: f64 = 0.015;
 const LOCAL_MAX_SETTLED: usize = 400_000;
 /// 골목 노드 상태 키에 더하는 값. 큰길 간선 상태 키는 간선 번호이다
 const ALLEY_KEY: u64 = 1 << 40;
+/// 큰길에서 포털로 막 들어온 골목 노드 상태 키에 더하는 값. 이 상태에서는 골목 링크로만 움직이고 같은 노드에서 바로 큰길로 나가지 않는다
+const ENTERED_KEY: u64 = 1 << 41;
 /// 골목 간선의 역방향 비트
 const REVERSED: u32 = 1 << 31;
 
@@ -344,7 +346,12 @@ impl RouteDb {
                                 from: fs,
                                 to: f,
                             };
-                            s.relax(ALLEY_KEY | v as u64, pen + (f - fs) * c, None, m);
+                            s.relax(
+                                ALLEY_KEY | ENTERED_KEY | v as u64,
+                                pen + (f - fs) * c,
+                                None,
+                                m,
+                            );
                         }
                     }
                 }
@@ -384,11 +391,19 @@ impl RouteDb {
                     }
                     for &(v, f) in portals_on(e) {
                         let m = Move::PortalIn { turn: t, frac: f };
-                        s.relax(ALLEY_KEY | v as u64, start + f * ce, Some(key), m);
+                        s.relax(
+                            ALLEY_KEY | ENTERED_KEY | v as u64,
+                            start + f * ce,
+                            Some(key),
+                            m,
+                        );
                     }
                 }
             } else {
-                let u = (key - ALLEY_KEY) as u32;
+                let u = (key & u64::from(u32::MAX)) as u32;
+                // 큰길에서 막 들어온 상태는 골목을 지나지 않고 큰길로 나가지 않는다.
+                // 나가면 같은 간선을 두 조각으로 되돌아가거나 회전 규칙 없이 다른 간선으로 건너간다
+                let entered = key & ENTERED_KEY != 0;
                 if let Some(&(c, piece)) = alley_targets.get(&u) {
                     s.offer(d + c, Some(key), Move::AlleyEnd(piece));
                 }
@@ -414,7 +429,7 @@ impl RouteDb {
                     );
                 }
                 for (e, f, pd) in alleys.portals_of(u) {
-                    if pd & PORTAL_OUT == 0 {
+                    if entered || pd & PORTAL_OUT == 0 {
                         continue;
                     }
                     let Some(c) = cost.edge(e) else {
@@ -638,6 +653,7 @@ impl RouteDb {
             segments: Vec::new(),
             steps: Vec::new(),
             school_zones: Vec::new(),
+            speeds: Vec::new(),
             min_height_cm: 0,
             min_weight_kg: 0,
             rest_veh: Vec::new(),
@@ -666,6 +682,11 @@ fn concat(mut a: Route, b: Route) -> Route {
             z.to_m += shift;
             z
         }));
+    a.speeds.extend(b.speeds.into_iter().map(|mut s| {
+        s.from_m += shift;
+        s.to_m += shift;
+        s
+    }));
     for mut seg in b.segments {
         seg.from_m += shift;
         seg.to_m += shift;

@@ -220,9 +220,12 @@ impl RiskStore {
     }
 }
 
-/// 응답 본문을 위험 지점 목록으로 바꾼다. resultCode가 00이 아니면 오류이다
+/// 응답 본문을 위험 지점 목록으로 바꾼다. resultCode 04(데이터가 존재하지 않습니다)는 빈 목록이고, 00·04가 아니면 오류이다
 pub fn parse(body: &[u8]) -> Result<Vec<RiskPoint>, String> {
     let body: Body = serde_json::from_slice(body).map_err(|e| format!("응답 해석 실패: {e}"))?;
+    if body.result_code == "04" {
+        return Ok(Vec::new());
+    }
     if body.result_code != "00" {
         return Err(format!("resultCode {}", body.result_code));
     }
@@ -296,6 +299,11 @@ mod tests {
         assert_eq!(points.len(), 2);
         assert_eq!(points[0].grade, 'B');
         assert!(parse(br#"{"resultCode":"99","items":[]}"#).is_err());
+        assert!(
+            parse(br#"{"resultCode":"04","totalCount":"0","items":[]}"#)
+                .unwrap()
+                .is_empty()
+        );
         let store = RiskStore::new();
         assert!(
             store

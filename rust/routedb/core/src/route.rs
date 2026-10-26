@@ -61,6 +61,14 @@ pub struct Section {
     pub to_m: f64,
 }
 
+/// 경로 위 큰길 링크 하나의 구간과 통행 속도. 통행 속도는 제한속도를 소통정보 속도 배율로 나눈 값이다
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpeedSpan {
+    pub from_m: f64,
+    pub to_m: f64,
+    pub kmh: f64,
+}
+
 /// 지나는 요금소. 영업소코드와 요금 링크 가운데의 출발점부터의 거리이다
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TollPass {
@@ -353,7 +361,7 @@ pub struct Route {
     pub to: Snap,
     /// 출발 스냅 지점부터 도착 스냅 지점까지의 거리(m)
     pub distance_m: f64,
-    /// 링크 길이를 제한속도로 나눈 시간의 합(초)
+    /// 링크 길이를 제한속도로 나눈 시간에 소통정보 속도 배율을 곱한 값의 합(초)
     pub duration_s: f64,
     /// 지나는 LINK_ID 열
     pub links: Vec<u64>,
@@ -375,6 +383,9 @@ pub struct Route {
     pub min_weight_kg: u16,
     /// 경로 링크에 있는 통행제한차량 코드
     pub rest_veh: Vec<u8>,
+    /// 큰길 링크마다의 구간과 통행 속도. 골목은 없고 응답 JSON에는 넣지 않는다
+    #[serde(skip)]
+    pub speeds: Vec<SpeedSpan>,
 }
 
 /// 그래프 파일, 링크 R-tree, CCH 구조, 프로파일별 metric
@@ -1009,6 +1020,10 @@ impl RouteDb {
         let (length, max_spd) = (file.length(), file.max_spd());
         let (from_frac, to_frac) = (self.fraction(&from), self.fraction(&to));
         let single = edges.len() == 1;
+        // 소통정보 속도 배율. 제한속도 시간에 곱하면 통행 속도로 지나는 시간이다. 돌발 배율은 경로 선택용이라 곱하지 않는다
+        let factors = self.factors.read().expect("factors 잠금 실패");
+        let speed = &factors.0;
+        let mut speeds = Vec::with_capacity(edges.len());
         let mut geometry = Vec::new();
         let mut pois = Vec::new();
         let mut tolls: Vec<TollPass> = Vec::new();
@@ -1039,7 +1054,12 @@ impl RouteDb {
                 bridged: i > 0 && self.tail[e] != file.head()[edges[i - 1] as usize],
             });
             geometry.extend(piece.iter().skip(if geometry.is_empty() { 0 } else { 1 }));
-            duration_ms += profile::link_time_ms(length, max_spd, e) * part;
+            duration_ms += profile::link_time_ms(length, max_spd, e) * part * speed[e] as f64;
+            speeds.push(SpeedSpan {
+                from_m: walked,
+                to_m: walked + part * length[e],
+                kmh: max_spd[e] as f64 / speed[e] as f64,
+            });
             // 요금소
             let cur = file.tolls_of(e);
             tolls.extend(
@@ -1159,6 +1179,7 @@ impl RouteDb {
             segments,
             steps,
             school_zones: Vec::new(),
+            speeds,
             min_height_cm: min_h,
             min_weight_kg: min_w,
             rest_veh: veh,

@@ -320,6 +320,10 @@ impl RouteDb {
             z.from_m += shift;
             z.to_m += shift;
         }
+        for s in &mut route.speeds {
+            s.from_m += shift;
+            s.to_m += shift;
+        }
         let main_len = route.distance_m;
         let mut segments = pre.segments;
         segments.extend(route.segments.into_iter().map(|mut s| {
@@ -377,6 +381,7 @@ impl RouteDb {
             segments: Vec::new(),
             steps: Vec::new(),
             school_zones: Vec::new(),
+            speeds: Vec::new(),
             min_height_cm: 0,
             min_weight_kg: 0,
             rest_veh: Vec::new(),

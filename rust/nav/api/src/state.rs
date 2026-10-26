@@ -8,7 +8,10 @@ use tokio::sync::broadcast;
 
 use crate::accident::index::AccidentIndex;
 use crate::caution::construction::ConstructionIndex;
+use crate::caution::disaster::DisasterStore;
 use crate::caution::enforce::EnforceTable;
+use crate::caution::incident::IncidentStore;
+use crate::caution::notice::NoticeStore;
 use crate::caution::rest::RestAreaIndex;
 use crate::caution::risk::RiskStore;
 use crate::caution::section::SectionIndex;
@@ -40,6 +43,12 @@ pub struct AppState {
     pub constructions: Arc<ConstructionIndex>,
     /// 고속도로 휴게소
     pub rest_areas: Arc<RestAreaIndex>,
+    /// 주의운전구간 실시간 메시지. 폴링 태스크가 바꾼다
+    pub notices: Arc<NoticeStore>,
+    /// 재난상황정보. 폴링 태스크가 바꾼다
+    pub disasters: Arc<DisasterStore>,
+    /// 돌발정보(국가교통정보센터·UTIC) 경고용 목록. 돌발정보 폴링 태스크가 바꾼다
+    pub incidents: Arc<IncidentStore>,
     /// 지오코더 색인
     pub geocoder: Arc<GeocodeIndex>,
     /// 통행료 영업소·요금표
@@ -70,6 +79,9 @@ pub struct RouteExtras {
     pub risk: Arc<RiskStore>,
     pub constructions: Arc<ConstructionIndex>,
     pub rest_areas: Arc<RestAreaIndex>,
+    pub notices: Arc<NoticeStore>,
+    pub disasters: Arc<DisasterStore>,
+    pub incidents: Arc<IncidentStore>,
 }
 
 impl AppState {
@@ -86,6 +98,9 @@ impl AppState {
             risk: Arc::clone(&self.risk),
             constructions: Arc::clone(&self.constructions),
             rest_areas: Arc::clone(&self.rest_areas),
+            notices: Arc::clone(&self.notices),
+            disasters: Arc::clone(&self.disasters),
+            incidents: Arc::clone(&self.incidents),
         }
     }
 }

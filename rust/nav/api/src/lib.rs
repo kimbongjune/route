@@ -20,6 +20,7 @@ use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use tower::ServiceBuilder;
+use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
@@ -33,7 +34,8 @@ pub fn web_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../web")))
 }
 
-/// 라우터 조립. API 경로가 아니면 nav/web의 정적 파일을 준다. 정적 파일은 고칠 때마다 바로 반영되도록 캐시하지 않게 한다
+/// 라우터 조립. API 경로가 아니면 nav/web의 정적 파일을 준다. 정적 파일은 고칠 때마다 바로 반영되도록 캐시하지 않게 한다.
+/// 응답은 브라우저가 받으면 gzip으로 압축한다(벡터 타일·JSON. 이미지는 압축하지 않는다)
 pub fn app(state: AppState) -> Router {
     let web = ServiceBuilder::new()
         .layer(SetResponseHeaderLayer::overriding(
@@ -47,6 +49,7 @@ pub fn app(state: AppState) -> Router {
         .merge(tiles::router())
         .route("/events", get(collector::handler::events))
         .fallback_service(web)
+        .layer(CompressionLayer::new())
         .with_state(state)
 }
 

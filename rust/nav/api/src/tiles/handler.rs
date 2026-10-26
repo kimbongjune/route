@@ -22,6 +22,17 @@ fn vector_layer_of(name: &str) -> Option<&'static str> {
         "rw" => Some("v_rw"),
         "sig" => Some("v_sig"),
         "emd" => Some("v_emd"),
+        "water_low" => Some("v_water_low"),
+        "water" => Some("v_water"),
+        "rail" => Some("v_rail2"),
+        "subway" => Some("v_subway"),
+        "link_z7" => Some("v_link_z7"),
+        "link_low" => Some("v_link_low"),
+        "link" => Some("v_link"),
+        "station" => Some("v_station"),
+        "forest_low" => Some("v_forest_low"),
+        "forest" => Some("v_forest"),
+        "land_extra" => Some("v_land_extra"),
         _ => None,
     }
 }
@@ -33,7 +44,7 @@ pub async fn vector_tile(
 ) -> Result<Response, AppError> {
     let Some(gs_layer) = vector_layer_of(&layer) else {
         return Err(AppError::BadRequest(format!(
-            "벡터 타일 레이어 {layer}는 없음. buld, road, road_major, rw, sig, emd 중 하나"
+            "벡터 타일 레이어 {layer}는 없음. buld, road, road_major, rw, sig, emd, water_low, water, rail, station, forest_low, forest, land_extra, subway, link_z7, link_low, link 중 하나"
         )));
     };
     let url = format!(
@@ -65,7 +76,11 @@ pub async fn vector_tile(
         );
         return Ok(response);
     }
-    // 격자 범위 밖(400)이나 빈 타일(204)은 본문 없이 상태 코드만 전달한다
+    // 레이어 범위 밖(GeoWebCache TileOutOfRange 400)은 빈 타일 204로 바꾼다. MapLibre는 400을 오류로 보고 204는 빈 타일로 본다.
+    // 빈 타일(204)과 그 밖의 상태 코드는 본문 없이 그대로 전달한다
+    if status == StatusCode::BAD_REQUEST {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
     Ok(status.into_response())
 }
 

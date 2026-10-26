@@ -1,5 +1,6 @@
 //! 국가교통정보센터 돌발상황정보 `/eventInfo` 폴링. 전면 통제는 돌발 배율 무한대, 부분 통제는 페널티 배율로 바꿔 적용 태스크에 보낸다.
-//! 이전 폴링에 있던 링크가 이번에 없으면 배율 1.0으로 되돌린다
+//! 이전 폴링에 있던 링크가 이번에 없으면 배율 1.0으로 되돌린다. UTIC 키가 있으면 UTIC 돌발정보도 함께 받아 같은 규칙으로 통제하고,
+//! 두 자료의 돌발을 경고용 `IncidentStore`에 넣는다
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -9,7 +10,9 @@ use routedb_core::route::{FactorKind, RouteDb, WeightUpdate};
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::utic::{self, UticRecord};
 use super::{Batch, Freshness, UpdateSender};
+use crate::caution::incident::{Incident, IncidentStore};
 
 const EVENT_URL: &str = "https://openapi.its.go.kr:9443/eventInfo";
 /// 부분 통제(차로 차단)의 돌발 배율
@@ -38,6 +41,10 @@ pub struct IncidentItem {
     pub start_date: String,
     #[serde(rename = "endDate", default)]
     pub end_date: String,
+    #[serde(rename = "coordX", default)]
+    pub coord_x: String,
+    #[serde(rename = "coordY", default)]
+    pub coord_y: String,
 }
 
 /// 통제 정도
@@ -186,31 +193,124 @@ pub async fn fetch_all(http: &reqwest::Client, key: &str) -> Result<Vec<Incident
     parse_items(&body)
 }
 
-/// 돌발정보를 받아 배율로 바꿔 적용 태스크에 보낸다. 호출이 실패하면 이전 배율을 그대로 유지하고 None을 반환한다
+/// 돌발 내용 문구. "<공사>::경부고속도로::서초IC::양재IC::1,2,3,4차로::[공사] 보수공사 / 장소: …" 꼴이면
+/// "경부고속도로 서초IC→양재IC 1,2,3,4차로, 보수공사"로 줄이고(설명은 첫 "/" 앞까지), 아니면 공백만 정리한다
+pub fn its_message(message: &str) -> String {
+    let parts: Vec<&str> = message.split("::").map(str::trim).collect();
+    if parts.len() < 6 {
+        return message.split_whitespace().collect::<Vec<_>>().join(" ");
+    }
+    let place = if parts[2] == parts[3] {
+        parts[2].to_string()
+    } else {
+        format!("{}→{}", parts[2], parts[3])
+    };
+    let rest = parts[5..].join(" ");
+    let first = rest.split('/').next().unwrap_or("").trim();
+    let detail = first
+        .strip_prefix('[')
+        .and_then(|s| s.split_once(']'))
+        .map_or(first, |(_, s)| s.trim());
+    let detail = detail.split_whitespace().collect::<Vec<_>>().join(" ");
+    format!("{} {place} {}, {detail}", parts[1], parts[4])
+}
+
+/// 경고용 돌발 목록. 국가교통정보센터 이벤트는 이벤트유형이 "기타"(이벤트/홍보 등)인 것을 빼고
+/// "공사(작업): (비상주차대)설비유지관리"처럼, UTIC은 돌발제목의 첫 "/" 앞까지를 문구로 한다
+pub fn to_incidents(items: &[IncidentItem], utic: &[UticRecord]) -> Vec<Incident> {
+    let mut out: Vec<Incident> = items
+        .iter()
+        .filter(|i| i.event_type.trim() != "기타")
+        .filter_map(|i| {
+            let link = i.link_id.trim().parse::<u64>().ok()?;
+            let (lon, lat) = (
+                i.coord_x.trim().parse::<f64>().ok()?,
+                i.coord_y.trim().parse::<f64>().ok()?,
+            );
+            let head = match i.event_detail_type.trim() {
+                "" => i.event_type.trim().to_string(),
+                detail => format!("{}({detail})", i.event_type.trim()),
+            };
+            let message = its_message(&i.message);
+            Some(Incident {
+                text: if message.is_empty() {
+                    head
+                } else {
+                    format!("{head}: {message}")
+                },
+                links: vec![link],
+                lat,
+                lon,
+            })
+        })
+        .collect();
+    out.extend(
+        utic.iter()
+            .filter(|r| !r.links.is_empty() && r.lat != 0.0)
+            .map(|r| Incident {
+                text: r.title.split('/').next().unwrap_or("").trim().to_string(),
+                links: r.links.clone(),
+                lat: r.lat,
+                lon: r.lon,
+            }),
+    );
+    out
+}
+
+/// 돌발정보 폴링에 필요한 고정 입력
+pub struct IncidentPoll<'a> {
+    pub http: &'a reqwest::Client,
+    /// 국가교통정보센터 인증키
+    pub key: &'a str,
+    /// UTIC 인증키. 없으면 UTIC 돌발정보를 받지 않는다
+    pub utic_key: Option<&'a str>,
+    pub db: &'a RouteDb,
+    pub updates: &'a UpdateSender,
+    pub store: &'a IncidentStore,
+}
+
+/// 돌발정보를 받아 배율로 바꿔 적용 태스크에 보낸다. 국가교통정보센터 호출이 실패하면 이전 배율을 그대로 유지하고 None을 반환한다.
+/// UTIC 호출이 실패하면 utic에 남아 있는 이전 UTIC 자료를 사용한다
 pub async fn poll_once(
-    http: &reqwest::Client,
-    key: &str,
-    db: &RouteDb,
-    updates: &UpdateSender,
+    poll: &IncidentPoll<'_>,
+    utic: &mut Vec<UticRecord>,
     previous: &HashSet<u64>,
 ) -> Option<(PollReport, HashSet<u64>)> {
+    let IncidentPoll {
+        http,
+        key,
+        utic_key,
+        db,
+        updates,
+        store,
+    } = *poll;
     let started = Instant::now();
     let mut report = PollReport::default();
-    let items = match fetch_all(http, key).await {
+    let mut items = match fetch_all(http, key).await {
         Ok(items) => items,
         Err(message) => {
             eprintln!("돌발정보 폴링 실패: {message}");
             return None;
         }
     };
+    if let Some(utic_key) = utic_key {
+        match utic::fetch(http, utic_key).await {
+            Ok(records) => *utic = records,
+            Err(message) => eprintln!("UTIC 돌발정보 실패, 이전 자료 사용: {message}"),
+        }
+    }
+    store.replace(to_incidents(&items, utic));
+    let its_count = items.len();
+    items.extend(utic::to_items(utic));
     report.items = items.len();
     let (batch, current) = to_updates(&items, previous, db, &mut report);
     if !batch.is_empty() && updates.send(Batch::Updates(batch)).await.is_err() {
         eprintln!("적용 태스크가 없어 돌발정보를 버림");
     }
     println!(
-        "돌발정보 폴링 이벤트 {} 링크 없음 {} 없는 링크 {} 전면 {} 부분 {} 해제 {} ({:.1}초)",
-        report.items,
+        "돌발정보 폴링 이벤트 {its_count} UTIC {}건 링크 {} 링크 없음 {} 없는 링크 {} 전면 {} 부분 {} 해제 {} ({:.1}초)",
+        utic.len(),
+        report.items - its_count,
         report.no_link,
         report.unknown,
         report.full,
@@ -226,17 +326,28 @@ pub async fn poll_once(
 pub async fn run(
     http: reqwest::Client,
     key: String,
+    utic_key: Option<String>,
     db: Arc<RouteDb>,
     updates: UpdateSender,
+    store: Arc<IncidentStore>,
     interval: Duration,
 ) {
     let mut ticker = tokio::time::interval(interval);
     let mut previous = HashSet::new();
+    let mut utic = Vec::new();
     let mut fresh = Freshness::new();
     loop {
         ticker.tick().await;
         let now = Instant::now();
-        match poll_once(&http, &key, &db, &updates, &previous).await {
+        let poll = IncidentPoll {
+            http: &http,
+            key: &key,
+            utic_key: utic_key.as_deref(),
+            db: &db,
+            updates: &updates,
+            store: &store,
+        };
+        match poll_once(&poll, &mut utic, &previous).await {
             Some((_, current)) => {
                 previous = current;
                 fresh.succeeded(now);
@@ -279,6 +390,24 @@ mod tests {
         assert_eq!(block_of(&item("01", "", "")), Block::None);
         assert_eq!(Block::Partial.factor(), PARTIAL_BLOCK_FACTOR);
         assert!(Block::Full.factor().is_infinite());
+    }
+
+    #[test]
+    fn its_message_short() {
+        assert_eq!(
+            its_message(
+                "<공사>::경부고속도로::서초IC::양재IC::1,2,3,4차로::[공사] 2026년 우면산고가교 보수 / 장소: 하부 / 부분통제"
+            ),
+            "경부고속도로 서초IC→양재IC 1,2,3,4차로, 2026년 우면산고가교 보수"
+        );
+        assert_eq!(
+            its_message("<공사>::경부고속도로::서초IC::서초IC::1차로::[공사] 보수공사"),
+            "경부고속도로 서초IC 1차로, 보수공사"
+        );
+        assert_eq!(
+            its_message(" (갓길)화물차  고장처리중 "),
+            "(갓길)화물차 고장처리중"
+        );
     }
 
     #[test]
