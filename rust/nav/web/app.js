@@ -4,10 +4,13 @@
 const TILE_URL = `${location.origin}/tiles/base/{z}/{x}/{y}`;
 const SEOUL_STATION = [126.9707, 37.5547];
 // 자체 지도 스타일. 소스와 레이어를 style-day.json에서 읽고 {origin}을 이 서버 주소로 바꾼다. 화면 버전과 같이 올린다
-const STYLE_VERSION = "21";
+const STYLE_VERSION = "22";
 const EMAP_STYLE = JSON.parse(
   (await (await fetch(`style-day.json?v=${STYLE_VERSION}`)).text()).replaceAll("{origin}", location.origin),
 );
+
+// 벡터 타일 해석 작업 스레드. MapLibre 5.6 기본값은 1개라 줌을 바꿀 때 타일이 한 스레드에서 줄을 선다
+maplibregl.setWorkerCount(Math.min(4, navigator.hardwareConcurrency || 2));
 
 const map = new maplibregl.Map({
   container: "map",
@@ -39,6 +42,8 @@ const map = new maplibregl.Map({
   attributionControl: { compact: true },
 });
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+// 콘솔에서 지도 상태와 렌더링 시간을 확인할 수 있게 둔다
+window.navMap = map;
 
 // "자체 지도": 브이월드 래스터를 숨기고 전자지도 스타일 레이어를 보인다
 document.getElementById("own-tiles").addEventListener("change", (event) => {

@@ -18,7 +18,7 @@
     "emap-forest-low": { "type": "vector", "tiles": ["{origin}/vtiles/forest_low/{z}/{x}/{y}"], "minzoom": 11, "maxzoom": 12, "attribution": "산림청 임상도" },
     "emap-forest": { "type": "vector", "tiles": ["{origin}/vtiles/forest/{z}/{x}/{y}"], "minzoom": 13, "maxzoom": 16 },
     "emap-land-extra": { "type": "vector", "tiles": ["{origin}/vtiles/land_extra/{z}/{x}/{y}"], "minzoom": 6, "maxzoom": 12 },
-    "terrain": { "type": "raster-dem", "tiles": ["{origin}/terrain/{z}/{x}/{y}.png"], "encoding": "terrarium", "tileSize": 256, "minzoom": 5, "maxzoom": 10, "attribution": "국토지리정보원 수치표고모델" }
+    "terrain": { "type": "raster-dem", "tiles": ["{origin}/terrain/{z}/{x}/{y}.png"], "encoding": "terrarium", "tileSize": 512, "minzoom": 5, "maxzoom": 10, "attribution": "국토지리정보원 수치표고모델" }
   },
   "layers": [
     { "id": "background", "type": "background", "paint": { "background-color": "#a9cfec" } },

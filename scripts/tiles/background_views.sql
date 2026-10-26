@@ -2,22 +2,32 @@
 --   docker compose exec -T postgis psql -U route -d route -v ON_ERROR_STOP=1 -f - < scripts/tiles/background_views.sql
 -- 낮은 줌용은 면적으로 거르고 단순화한 테이블을 미리 만든다(뷰에서 매번 단순화하면 타일 생성이 느리다)
 
--- 물: 실폭하천과 호수·저수지. 줌 12 이상은 전부, 6~11은 면적 10만㎡ 이상을 20m로 단순화
+-- 물: 실폭하천과 호수·저수지. 줌 12 이상은 전부, 6~11은 면적 10만㎡ 이상을 20m로 단순화.
+-- 큰 강 면은 꼭짓점이 18만 개, 구멍이 수백 개라 브라우저가 면을 삼각형으로 나누는 계산이 무거워 꼭짓점 256개 이하 조각으로 나눈다
 DROP TABLE IF EXISTS emap.bg_water_low CASCADE;
 CREATE TABLE emap.bg_water_low AS
-SELECT 'river'::text AS kind, NULL::text AS name, ST_Multi(ST_SimplifyPreserveTopology(geom, 20))::geometry(MultiPolygon, 3857) AS geom
-FROM emap.bg_river WHERE ST_Area(geom) >= 100000
-UNION ALL
-SELECT 'lake', name, ST_Multi(ST_SimplifyPreserveTopology(geom, 20))::geometry(MultiPolygon, 3857)
-FROM emap.bg_lake WHERE ST_Area(geom) >= 100000;
+SELECT kind, name, ST_Multi(ST_Subdivide(ST_CollectionExtract(ST_MakeValid(geom), 3), 256))::geometry(MultiPolygon, 3857) AS geom FROM (
+  SELECT 'river'::text AS kind, NULL::text AS name, ST_SimplifyPreserveTopology(geom, 20) AS geom
+  FROM emap.bg_river WHERE ST_Area(geom) >= 100000
+  UNION ALL
+  SELECT 'lake', name, ST_SimplifyPreserveTopology(geom, 20)
+  FROM emap.bg_lake WHERE ST_Area(geom) >= 100000
+) w;
 CREATE INDEX bg_water_low_geom_idx ON emap.bg_water_low USING GIST (geom);
 ANALYZE emap.bg_water_low;
 
+DROP TABLE IF EXISTS emap.bg_water CASCADE;
+CREATE TABLE emap.bg_water AS
+SELECT kind, name, ST_Multi(ST_Subdivide(ST_CollectionExtract(ST_MakeValid(geom), 3), 256))::geometry(MultiPolygon, 3857) AS geom FROM (
+  SELECT 'river'::text AS kind, NULL::text AS name, geom FROM emap.bg_river
+  UNION ALL
+  SELECT 'lake', name, geom FROM emap.bg_lake
+) w;
+CREATE INDEX bg_water_geom_idx ON emap.bg_water USING GIST (geom);
+ANALYZE emap.bg_water;
+
 CREATE OR REPLACE VIEW emap.v_water_low AS SELECT kind, name, geom FROM emap.bg_water_low;
-CREATE OR REPLACE VIEW emap.v_water AS
-SELECT 'river'::text AS kind, NULL::text AS name, geom FROM emap.bg_river
-UNION ALL
-SELECT 'lake', name, geom FROM emap.bg_lake;
+CREATE OR REPLACE VIEW emap.v_water AS SELECT kind, name, geom FROM emap.bg_water;
 
 -- 역: 도시광역철도 역사(같은 이름 300m 안은 한 역). 이름이 "역"으로 끝나지 않으면 "역"을 더한다
 CREATE OR REPLACE VIEW emap.v_station AS
