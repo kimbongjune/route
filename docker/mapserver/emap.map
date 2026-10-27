@@ -1,0 +1,204 @@
+# PostGIS emap 뷰를 벡터 타일(MVT)로 내보내는 MapServer 설정. 레이어 이름은 뷰 이름과 같고 style-day.json의 source-layer이다
+# 뷰에는 키가 없어 뷰와 같은 질의를 원본 테이블에 직접 하고 ctid(또는 gid)를 MapServer가 요구하는 고유 키 msid로 한다. msid는 타일에 넣지 않는다
+# 접속 비밀번호는 컨테이너 환경 변수 PGPASSWORD로 받는다
+MAP
+  NAME "emap"
+  EXTENT -20037508.34 -20037508.34 20037508.34 20037508.34
+  SIZE 256 256
+  PROJECTION "init=epsg:3857" END
+  OUTPUTFORMAT
+    NAME "mvt"
+    DRIVER MVT
+    MIMETYPE "application/vnd.mapbox-vector-tile"
+    FORMATOPTION "EXTENT=4096"
+    FORMATOPTION "EDGE_BUFFER=20"
+  END
+  WEB METADATA "wms_enable_request" "*" "wms_srs" "EPSG:3857 EPSG:900913" "wms_getmap_formatlist" "application/vnd.mapbox-vector-tile" "wms_title" "emap" END END
+  LAYER
+    NAME "v_buld"
+    TYPE POLYGON
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select ctid::text as msid, nullif(buld_nm::text,'') as name, gro_flo_co::integer as floors, geom from emap.buld) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_buld" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+  LAYER
+    NAME "v_road"
+    TYPE LINE
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select gid::text as msid, gid, rn as name, roa_cls_se as cls, road_bt::real as width, wdr_rd_cd as admin, geom from emap.sprd_manage) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_road" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+  LAYER
+    NAME "v_road_major"
+    TYPE LINE
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select gid::text as msid, gid, rn as name, roa_cls_se as cls, road_bt::real as width, wdr_rd_cd as admin, geom from emap.sprd_manage where roa_cls_se in ('1','2')) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_road_major" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+  LAYER
+    NAME "v_rw"
+    TYPE POLYGON
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select gid::text as msid, gid, geom from emap.sprd_rw) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_rw" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+  LAYER
+    NAME "v_sig"
+    TYPE POLYGON
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select gid::text as msid, gid, sig_cd as code, sig_kor_nm as name, geom from emap.scco_sig) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_sig" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+  LAYER
+    NAME "v_emd"
+    TYPE POLYGON
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select gid::text as msid, gid, emd_cd as code, emd_kor_nm as name, geom from emap.scco_emd) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_emd" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+  LAYER
+    NAME "v_water_low"
+    TYPE POLYGON
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select ctid::text as msid, kind, name, geom from emap.bg_water_low) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_water_low" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+  LAYER
+    NAME "v_water"
+    TYPE POLYGON
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select ctid::text as msid, kind, name, geom from emap.bg_water) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_water" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+  LAYER
+    NAME "v_rail2"
+    TYPE LINE
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select ctid::text as msid, rlway_nm as name, rlroad_se as cls, geom from emap.bg_rlink where rlroad_se in ('RRC001','RRC002')) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_rail2" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+  LAYER
+    NAME "v_subway"
+    TYPE LINE
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select ctid::text as msid, sub_nm as name, geom from emap.bg_subway_line) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_subway" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+  LAYER
+    NAME "v_link_z7"
+    TYPE LINE
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select ctid::text as msid, rank, name, geom from emap.bg_link_z7) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_link_z7" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+  LAYER
+    NAME "v_link_low"
+    TYPE LINE
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select ctid::text as msid, rank, name, geom from emap.bg_link_low) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_link_low" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+  LAYER
+    NAME "v_link"
+    TYPE LINE
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select ctid::text as msid, road_rank as rank, nullif(road_name::text,'') as name, lanes, geom from emap.bg_link) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_link" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+  LAYER
+    NAME "v_station"
+    TYPE POINT
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select ctid::text as msid, (case when name::text like '%역' then name::text else name::text || '역' end)::varchar as name, lines, geom from emap.bg_station) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_station" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+  LAYER
+    NAME "v_forest_low"
+    TYPE POLYGON
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select ctid::text as msid, cls, geom from emap.bg_forest_low) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_forest_low" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+  LAYER
+    NAME "v_forest"
+    TYPE POLYGON
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select ctid::text as msid, frtp_cd as cls, geom from emap.bg_forest where frtp_cd in ('1','2','3','4')) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_forest" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+  LAYER
+    NAME "v_land_extra"
+    TYPE POLYGON
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=postgis dbname=route user=route"
+    DATA "geom from (select ctid::text as msid, geom from emap.bg_land_extra) as t using unique msid using srid=3857"
+    PROJECTION "init=epsg:3857" END
+    METADATA "wms_title" "v_land_extra" "gml_include_items" "all" "gml_exclude_items" "msid" "gml_types" "auto" END
+    CLASS END
+  END
+END

@@ -1367,8 +1367,8 @@ docker compose run --rm importer
 docker compose run --rm importer importer-geocode
 docker compose run --rm loader 서울특별시
 docker compose run --rm loader
-bash scripts/tiles/geoserver_setup.sh
-bash scripts/tiles/gwc_seed.sh
+docker compose exec -T postgis psql -U route -d route -v ON_ERROR_STOP=1 -f - < scripts/tiles/emap_views.sql
+bash scripts/tiles/mapcache_seed.sh
 docker compose down
 curl -X POST http://127.0.0.1:3000/route -H "Content-Type: application/json" -d '{"from":{"lat":37.5547,"lon":126.9707},"to":{"lat":37.4979,"lon":127.0276},"profile":"time"}'
 # Windows cmd는 작은따옴표를 인식하지 않으므로 큰따옴표를 이스케이프한다

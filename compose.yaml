@@ -1,4 +1,4 @@
-# docker compose up                       내비 API, PostGIS, GeoServer
+# docker compose up                       내비 API, PostGIS, MapServer
 # docker compose run --rm importer        그래프 파일과 CCH 생성(배치, 실행 후 종료)
 # docker compose run --rm importer importer-geocode   지오코더 색인 생성
 # docker compose run --rm importer importer-alley     골목 파일 생성(그래프 파일 다음에 실행)
@@ -18,7 +18,7 @@ services:
     environment:
       ROUTE_MAPS_DIR: /maps
       NAV_ADDR: 0.0.0.0:3000
-      GEOSERVER_URL: http://geoserver:8080/geoserver
+      MAPSERVER_URL: http://mapserver
     deploy:
       resources:
         limits:
@@ -51,20 +51,19 @@ services:
     shm_size: 1g
     restart: unless-stopped
 
-  # 벡터 타일 발행과 GeoWebCache. 이미지가 vectortiles 플러그인을 기동 시 설치한다
-  geoserver:
-    image: kartoza/geoserver:2.28.2
+  # 벡터 타일 발행(MapServer)과 캐시(MapCache). 설정은 docker/mapserver, 캐시는 볼륨 mapcache에 남는다
+  mapserver:
+    build: docker/mapserver
+    image: route-mapserver
     environment:
-      GEOSERVER_ADMIN_USER: admin
-      GEOSERVER_ADMIN_PASSWORD: ${GEOSERVER_ADMIN_PASSWORD}
-      GEOSERVER_DATA_DIR: /opt/geoserver/data_dir
-      GEOWEBCACHE_CACHE_DIR: /opt/geoserver/data_dir/gwc
-      INITIAL_MEMORY: 1G
-      MAXIMUM_MEMORY: 4G
+      PGHOST: postgis
+      PGUSER: route
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: route
     volumes:
-      - geoserver_data:/opt/geoserver/data_dir
+      - mapcache:/var/cache/mapcache
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8080:80"
     depends_on:
       - postgis
     restart: unless-stopped
@@ -88,4 +87,4 @@ services:
 
 volumes:
   pgdata:
-  geoserver_data:
+  mapcache:

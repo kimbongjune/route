@@ -58,8 +58,8 @@ fn main() {
             .map(|x| x.trim().parse().expect("파일을 열 수 없음"))
             .collect();
         // 출발·도착 후보 5개씩 중 경로가 있는 첫 조합
-        let froms = index.nearest_n(v[0], v[1], 5);
-        let tos = index.nearest_n(v[2], v[3], 5);
+        let froms = index.nearest_n((&file).into(), v[0], v[1], 5);
+        let tos = index.nearest_n((&file).into(), v[2], v[3], 5);
         let mut found = None;
         'outer: for from in &froms {
             for to in &tos {

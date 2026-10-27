@@ -893,7 +893,7 @@ impl Router<'_> {
         );
         let metric_view = &self.metrics.view(profile);
         let query = &mut self.query;
-        let mut froms = db.index.nearest_n(from.0, from.1, 5);
+        let mut froms = db.index.nearest_n(file.into(), from.0, from.1, 5);
         if let Some(heading) = from_heading {
             let matched: Vec<Snap> = froms
                 .iter()
@@ -904,7 +904,7 @@ impl Router<'_> {
                 froms = matched;
             }
         }
-        let tos = db.index.nearest_n(to.0, to.1, 5);
+        let tos = db.index.nearest_n(file.into(), to.0, to.1, 5);
         // 출발·도착이 가까우면 큰길과 골목을 함께 탐색한 경로를 쓴다
         if self.local
             && let Some(route) = db.local_route(profile, from, from_heading, &froms, to, &tos)

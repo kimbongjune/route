@@ -6,7 +6,7 @@
 //! 인자가 없으면 데이터 폴더(환경 변수 ROUTE_MAPS_DIR, 없으면 저장소의 maps) 아래의 기본 위치이고 주소는 NAV_ADDR, 없으면 127.0.0.1:3000이다.
 //! 정적 파일 폴더는 NAV_WEB_DIR, 없으면 저장소의 nav/web이다.
 //! 배경지도 타일용 브이월드 인증키는 환경 변수 VWORLD_API_KEY 또는 저장소 루트 .env의 VWORLD_API_KEY에서 읽는다.
-//! 자체 벡터 타일은 GEOSERVER_URL(없으면 http://127.0.0.1:8080/geoserver)의 GeoServer에서 받아 전달한다.
+//! 자체 벡터 타일은 MAPSERVER_URL(없으면 http://127.0.0.1:8080)의 MapCache에서 받아 전달한다.
 //! 국가교통정보센터 인증키 ITS_API_KEY와 폴링 간격 TRAFFIC_POLL_SECS가 모두 있을 때만 소통정보 폴링 태스크를 실행하고,
 //! INCIDENT_POLL_SECS가 있을 때만 돌발정보 폴링 태스크를 실행한다.
 //! 인증키의 월 호출 한도가 1,000건이라 폴링 한 번(타일 16번)마다 한도를 쓰므로 기본으로는 폴링하지 않는다.
@@ -36,7 +36,7 @@ use tokio::sync::broadcast;
 /// `ROUTE_MAPS_DIR`이 없을 때의 데이터 폴더
 const DEFAULT_MAPS_DIR: &str = r"C:\Users\nocdu\Desktop\dev\route\maps";
 const DEFAULT_ADDR: &str = "127.0.0.1:3000";
-const DEFAULT_GEOSERVER_URL: &str = "http://127.0.0.1:8080/geoserver";
+const DEFAULT_MAPSERVER_URL: &str = "http://127.0.0.1:8080";
 const ENV_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../.env");
 
 /// 데이터 폴더. 환경 변수 `ROUTE_MAPS_DIR`이 있으면 그 폴더이다
@@ -113,8 +113,8 @@ async fn main() {
         PathBuf::from,
     );
     let vworld_key = env_value("VWORLD_API_KEY").expect("VWORLD_API_KEY가 없음");
-    let geoserver_url = std::env::var("GEOSERVER_URL")
-        .unwrap_or_else(|_| DEFAULT_GEOSERVER_URL.to_string())
+    let mapserver_url = std::env::var("MAPSERVER_URL")
+        .unwrap_or_else(|_| DEFAULT_MAPSERVER_URL.to_string())
         .trim_end_matches('/')
         .to_string();
 
@@ -321,7 +321,7 @@ async fn main() {
         tolls: Arc::new(tolls),
         http,
         vworld_key,
-        geoserver_url,
+        mapserver_url,
         updates,
         events,
     });

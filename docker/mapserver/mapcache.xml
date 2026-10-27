@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- MapServer 벡터 타일을 /var/cache/mapcache에 캐시한다. 주소는 /mapcache/gmaps/{레이어}@GoogleMapsCompatible/{z}/{x}/{y}.pbf -->
+<mapcache>
+  <format name="mvt" type="RAW"><extension>pbf</extension><mime_type>application/vnd.mapbox-vector-tile</mime_type></format>
+  <cache name="disk" type="disk"><base>/var/cache/mapcache</base></cache>
+  <source name="v_buld" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_buld</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_buld"><source>v_buld</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <source name="v_road" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_road</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_road"><source>v_road</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <source name="v_road_major" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_road_major</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_road_major"><source>v_road_major</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <source name="v_rw" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_rw</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_rw"><source>v_rw</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <source name="v_sig" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_sig</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_sig"><source>v_sig</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <source name="v_emd" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_emd</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_emd"><source>v_emd</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <source name="v_water_low" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_water_low</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_water_low"><source>v_water_low</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <source name="v_water" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_water</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_water"><source>v_water</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <source name="v_rail2" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_rail2</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_rail2"><source>v_rail2</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <source name="v_subway" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_subway</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_subway"><source>v_subway</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <source name="v_link_z7" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_link_z7</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_link_z7"><source>v_link_z7</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <source name="v_link_low" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_link_low</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_link_low"><source>v_link_low</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <source name="v_link" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_link</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_link"><source>v_link</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <source name="v_station" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_station</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_station"><source>v_station</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <source name="v_forest_low" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_forest_low</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_forest_low"><source>v_forest_low</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <source name="v_forest" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_forest</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_forest"><source>v_forest</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <source name="v_land_extra" type="wms"><getmap><params><FORMAT>application/vnd.mapbox-vector-tile</FORMAT><LAYERS>v_land_extra</LAYERS></params></getmap>
+    <http><url>http://localhost/mapserver/?map=/etc/mapserver/emap.map&amp;</url></http></source>
+  <tileset name="v_land_extra"><source>v_land_extra</source><cache>disk</cache><grid>GoogleMapsCompatible</grid><format>mvt</format><metatile>1 1</metatile><metabuffer>0</metabuffer><expires>86400</expires></tileset>
+  <service type="gmaps" enabled="true"/>
+  <service type="wmts" enabled="false"/>
+  <service type="wms" enabled="false"/>
+  <errors>report</errors>
+  <lock_dir>/tmp</lock_dir>
+  <threaded_fetching>true</threaded_fetching>
+</mapcache>

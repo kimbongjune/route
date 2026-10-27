@@ -561,13 +561,13 @@ fn main() {
     let started = Instant::now();
     let index = LinkIndex::build(file.geom_first(), file.geom_lat(), file.geom_lon());
     println!(
-        "R-tree 선분 {} ({:.0}ms)",
+        "R-tree 간선 {} ({:.0}ms)",
         index.len(),
         started.elapsed().as_secs_f64() * 1000.0
     );
     let started = Instant::now();
     let snap = index
-        .nearest(37.5547, 126.9707)
+        .nearest((&file).into(), 37.5547, 126.9707)
         .expect("서울역 근처에 링크가 없음");
     println!(
         "서울역 37.5547, 126.9707 -> 링크 {} 거리 {:.1}m 위치 {:.6}, {:.6} ({:.2}ms)",

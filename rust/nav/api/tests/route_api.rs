@@ -106,7 +106,7 @@ fn app_with_state() -> (Router, Arc<RouteDb>, AppState) {
         ),
         http: reqwest::Client::new(),
         vworld_key: String::new(),
-        geoserver_url: String::new(),
+        mapserver_url: String::new(),
         updates,
         events,
     };

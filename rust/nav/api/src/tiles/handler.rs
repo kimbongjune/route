@@ -1,4 +1,4 @@
-//! `GET /tiles/{layer}/{z}/{x}/{y}`: 브이월드 WMTS 타일을, `GET /vtiles/{layer}/{z}/{x}/{y}`: GeoServer 벡터 타일을 그대로 전달한다
+//! `GET /tiles/{layer}/{z}/{x}/{y}`: 브이월드 WMTS 타일을, `GET /vtiles/{layer}/{z}/{x}/{y}`: MapCache(MapServer) 벡터 타일을 그대로 전달한다
 
 use axum::body::Body;
 use axum::extract::{Path, State};
@@ -13,7 +13,7 @@ const VWORLD_WMTS_URL: &str = "https://api.vworld.kr/req/wmts/1.0.0";
 const CACHE_CONTROL: &str = "public, max-age=86400";
 const MVT_CONTENT_TYPE: &str = "application/vnd.mapbox-vector-tile";
 
-/// 자체 벡터 타일 레이어. GeoServer의 emap 워크스페이스 뷰 레이어 이름
+/// 자체 벡터 타일 레이어. docker/mapserver/emap.map의 레이어(PostGIS emap 뷰) 이름
 fn vector_layer_of(name: &str) -> Option<&'static str> {
     match name {
         "buld" => Some("v_buld"),
@@ -37,34 +37,33 @@ fn vector_layer_of(name: &str) -> Option<&'static str> {
     }
 }
 
-/// GeoServer GeoWebCache의 WMTS에서 벡터 타일을 받아 전달한다. 범위 밖이나 빈 타일은 GeoServer가 주는 상태 코드를 그대로 돌려준다
+/// MapCache에서 벡터 타일을 받아 전달한다. 빈 타일도 MapCache가 200으로 주고, 그 밖의 상태 코드는 본문 없이 그대로 돌려준다
 pub async fn vector_tile(
     State(state): State<AppState>,
     Path((layer, z, x, y)): Path<(String, u8, u32, u32)>,
 ) -> Result<Response, AppError> {
-    let Some(gs_layer) = vector_layer_of(&layer) else {
+    let Some(ms_layer) = vector_layer_of(&layer) else {
         return Err(AppError::BadRequest(format!(
             "벡터 타일 레이어 {layer}는 없음. buld, road, road_major, rw, sig, emd, water_low, water, rail, station, forest_low, forest, land_extra, subway, link_z7, link_low, link 중 하나"
         )));
     };
     let url = format!(
-        "{}/gwc/service/wmts?REQUEST=GetTile&SERVICE=WMTS&VERSION=1.0.0&LAYER=emap:{gs_layer}&STYLE=\
-         &TILEMATRIXSET=EPSG:900913&TILEMATRIX=EPSG:900913:{z}&TILECOL={x}&TILEROW={y}&FORMAT={MVT_CONTENT_TYPE}",
-        state.geoserver_url
+        "{}/mapcache/gmaps/{ms_layer}@GoogleMapsCompatible/{z}/{x}/{y}.pbf",
+        state.mapserver_url
     );
     let upstream = state
         .http
         .get(&url)
         .send()
         .await
-        .map_err(|e| AppError::Upstream(format!("GeoServer 타일 호출 실패: {e}")))?;
+        .map_err(|e| AppError::Upstream(format!("MapCache 타일 호출 실패: {e}")))?;
     let status =
         StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     if status == StatusCode::OK {
         let bytes = upstream
             .bytes()
             .await
-            .map_err(|e| AppError::Upstream(format!("GeoServer 타일 본문 읽기 실패: {e}")))?;
+            .map_err(|e| AppError::Upstream(format!("MapCache 타일 본문 읽기 실패: {e}")))?;
         let mut response = (StatusCode::OK, Body::from(bytes)).into_response();
         response.headers_mut().insert(
             header::CONTENT_TYPE,
@@ -75,11 +74,6 @@ pub async fn vector_tile(
             HeaderValue::from_static(CACHE_CONTROL),
         );
         return Ok(response);
-    }
-    // 레이어 범위 밖(GeoWebCache TileOutOfRange 400)은 빈 타일 204로 바꾼다. MapLibre는 400을 오류로 보고 204는 빈 타일로 본다.
-    // 빈 타일(204)과 그 밖의 상태 코드는 본문 없이 그대로 전달한다
-    if status == StatusCode::BAD_REQUEST {
-        return Ok(StatusCode::NO_CONTENT.into_response());
     }
     Ok(status.into_response())
 }
