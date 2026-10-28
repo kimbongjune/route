@@ -94,6 +94,7 @@ fn app_with_state() -> (Router, Arc<RouteDb>, AppState) {
         notices: Arc::new(NoticeStore::new()),
         disasters: Arc::new(DisasterStore::new()),
         incidents: Arc::new(IncidentStore::new()),
+        vsl: Arc::new(nav_api::collector::vsl::VslStore::new()),
         geocoder: Arc::new(
             GeocodeIndex::open(&dir.join("geocode.idx")).expect("지오코더 색인을 열지 못함"),
         ),
@@ -406,6 +407,7 @@ async fn weight_updates_change_route() {
         link_id: blocked,
         speed_factor: None,
         incident_factor: Some(f32::INFINITY),
+        vsl_factor: None,
     }]);
     assert_eq!((report.applied, report.unknown, report.blocked), (1, 0, 1));
     eprintln!("update_weights 전면 통제 1건 {:.0}ms", report.elapsed_ms);
@@ -434,6 +436,7 @@ async fn weight_updates_change_route() {
             link_id,
             speed_factor: Some(2.0),
             incident_factor: None,
+            vsl_factor: None,
         })
         .collect();
     let report = db.update_weights(&updates);
@@ -453,6 +456,23 @@ async fn weight_updates_change_route() {
     )
     .await;
     assert_eq!(distance["data"]["links"].as_array().map(Vec::len), Some(79));
+
+    // 가변속도 배율 3을 더하면 속도 배율 2보다 느린 쪽이 적용되어 더 늘고, 가변속도만 되돌리면 속도 배율 2의 시간으로 돌아간다
+    let vsl: Vec<WeightUpdate> = road_links
+        .iter()
+        .map(|&link_id| WeightUpdate {
+            link_id,
+            vsl_factor: Some(3.0),
+            ..Default::default()
+        })
+        .collect();
+    db.update_weights(&vsl);
+    let (_, slower) = send(&app, "POST", "/route", body.clone()).await;
+    let slow_s = slow["data"]["duration_s"].as_f64().expect("duration_s");
+    assert!(slower["data"]["duration_s"].as_f64().expect("duration_s") > slow_s);
+    db.reset_factors(routedb_core::route::FactorKind::Vsl);
+    let (_, back) = send(&app, "POST", "/route", body.clone()).await;
+    assert_eq!(back["data"]["duration_s"].as_f64(), Some(slow_s));
 
     // 되돌리면 처음 경로와 같다
     db.reset_weights();
@@ -482,6 +502,7 @@ async fn update_channel_applies_and_broadcasts() {
             link_id: blocked,
             speed_factor: None,
             incident_factor: Some(f32::INFINITY),
+            vsl_factor: None,
         }]))
         .await
         .expect("채널 전송 실패");

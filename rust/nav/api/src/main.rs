@@ -302,6 +302,25 @@ async fn main() {
         }
         _ => println!("ITS_API_KEY 또는 INCIDENT_POLL_SECS가 없어 돌발정보 폴링을 하지 않음"),
     }
+    // 가변속도제한. ITS 키가 있으면 VSL_POLL_SECS(없으면 300초)마다 받는다
+    let vsl = Arc::new(collector::vsl::VslStore::new());
+    match env_value("ITS_API_KEY") {
+        Some(its_key) => {
+            let secs: u64 = env_value("VSL_POLL_SECS")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(300);
+            println!("가변속도제한 폴링 {secs}초 간격");
+            tokio::spawn(collector::vsl::run(
+                http.clone(),
+                its_key,
+                Arc::clone(&db),
+                Arc::clone(&vsl),
+                updates.clone(),
+                Duration::from_secs(secs),
+            ));
+        }
+        None => println!("ITS_API_KEY가 없어 가변속도제한을 받지 않음"),
+    }
     let app = nav_api::app(AppState {
         db,
         accidents: Arc::new(accidents),
@@ -317,6 +336,7 @@ async fn main() {
         notices,
         disasters,
         incidents,
+        vsl,
         geocoder: Arc::new(geocoder),
         tolls: Arc::new(tolls),
         http,

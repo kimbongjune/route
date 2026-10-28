@@ -99,4 +99,4 @@ cargo test --workspace
 
 ## 서버 사양
 
-요청이 없을 때 nav-api 약 1.15GB, MapServer 약 0.24GB, PostGIS 약 0.24GB를 사용한다(2026-10-27 측정). 디스크는 PostGIS 약 21GB, 경로·검색 파일 3.7GB와 타일 캐시가 필요하다.
+요청이 없을 때 nav-api 약 1.15GB, MapServer 약 0.24GB, PostGIS 약 0.24GB를 사용한다(2026-10-27 측정). 디스크는 PostGIS 약 21GB, 경로·검색 파일 3.7GB, 타일 캐시 6.9GB(`mapcache_seed.sh` 기본 범위 전국, 4,888초)가 필요하다.

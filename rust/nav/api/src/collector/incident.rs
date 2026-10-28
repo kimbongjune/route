@@ -159,6 +159,7 @@ pub fn to_updates(
             link_id,
             speed_factor: None,
             incident_factor: Some(block.factor()),
+            vsl_factor: None,
         });
     }
     for &link_id in previous.difference(&current) {
@@ -167,6 +168,7 @@ pub fn to_updates(
             link_id,
             speed_factor: None,
             incident_factor: Some(1.0),
+            vsl_factor: None,
         });
     }
     (updates, current)

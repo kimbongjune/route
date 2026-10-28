@@ -113,6 +113,7 @@ pub fn to_updates(
             link_id,
             speed_factor: Some(factor),
             incident_factor: None,
+            vsl_factor: None,
         };
         match index_of.get(&link_id) {
             Some(&i) => updates[i] = update,

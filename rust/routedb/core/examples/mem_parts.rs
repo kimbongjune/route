@@ -113,6 +113,7 @@ fn main() {
         link_id,
         speed_factor: Some(0.9),
         incident_factor: None,
+        vsl_factor: None,
     }]);
     step("실시간 배율 반영(최소시간·무료도로 customize 결과 메모리)");
 }

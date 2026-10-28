@@ -61,7 +61,7 @@ pub struct Section {
     pub to_m: f64,
 }
 
-/// 경로 위 큰길 링크 하나의 구간과 통행 속도. 통행 속도는 제한속도를 소통정보 속도 배율로 나눈 값이다
+/// 경로 위 큰길 링크 하나의 구간과 통행 속도. 통행 속도는 제한속도를 소통정보 속도 배율과 가변속도 배율 중 큰 값으로 나눈 값이다
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpeedSpan {
     pub from_m: f64,
@@ -415,13 +415,15 @@ impl Metrics {
     }
 }
 
-/// 링크 하나의 실시간 배율. 통행 시간에 속도 배율과 돌발 배율을 곱한다. 전면 통제는 돌발 배율 무한대이다.
-/// None인 배율은 이전 값을 유지하므로 소통정보와 돌발정보를 따로 반영할 수 있다
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// 링크 하나의 실시간 배율. 통행 시간에 속도 배율과 가변속도 배율 중 큰 값과 돌발 배율을 곱한다. 전면 통제는 돌발 배율 무한대이다.
+/// None인 배율은 이전 값을 유지하므로 소통정보, 돌발정보, 가변속도제한을 따로 반영할 수 있다
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct WeightUpdate {
     pub link_id: u64,
     pub speed_factor: Option<f32>,
     pub incident_factor: Option<f32>,
+    /// 가변속도제한 배율. 제한속도 ÷ 가변 제한속도이며 1.0 아래로 내리지 않는다
+    pub vsl_factor: Option<f32>,
 }
 
 /// 실시간 배율의 종류
@@ -431,6 +433,37 @@ pub enum FactorKind {
     Speed,
     /// 돌발정보의 돌발 배율
     Incident,
+    /// 가변속도제한(VSL) 배율
+    Vsl,
+}
+
+/// 간선마다 실시간 배율 세 가지. 기본 1.0이다
+struct Factors {
+    speed: Vec<f32>,
+    incident: Vec<f32>,
+    vsl: Vec<f32>,
+}
+
+impl Factors {
+    fn new(n: usize) -> Self {
+        Self {
+            speed: vec![1.0; n],
+            incident: vec![1.0; n],
+            vsl: vec![1.0; n],
+        }
+    }
+
+    /// 통행 속도 배율. 소통정보 속도와 가변 제한속도 중 느린 쪽이다
+    fn speed(&self, e: usize) -> f32 {
+        self.speed[e].max(self.vsl[e])
+    }
+
+    /// 간선마다 시간 배율
+    fn time(&self) -> Vec<f32> {
+        (0..self.speed.len())
+            .map(|e| self.speed(e) * self.incident[e])
+            .collect()
+    }
 }
 
 /// `update_weights` 결과
@@ -458,8 +491,8 @@ pub struct RouteDb {
     metrics: RwLock<Arc<Metrics>>,
     /// 파일에서 연 정적 metric 묶음. 배율을 되돌릴 때 사용한다
     base_metrics: Arc<Metrics>,
-    /// 간선마다 속도 배율과 돌발 배율. 기본 1.0이며 시간 배율은 둘의 곱이다
-    factors: RwLock<(Vec<f32>, Vec<f32>)>,
+    /// 간선마다 속도·돌발·가변속도 배율. 기본 1.0이다
+    factors: RwLock<Factors>,
     /// LINK_ID에서 간선 번호
     edge_of_link: HashMap<u64, u32>,
     /// 골목 파일. 없으면 골목 없이 탐색한다
@@ -544,10 +577,7 @@ impl RouteDb {
             .enumerate()
             .map(|(e, &id)| (id, e as u32))
             .collect();
-        let factors = (
-            vec![1.0f32; file.edge_count()],
-            vec![1.0f32; file.edge_count()],
-        );
+        let factors = Factors::new(file.edge_count());
         Ok(Self {
             file,
             index,
@@ -594,10 +624,9 @@ impl RouteDb {
         Arc::clone(&self.metrics.read().expect("metrics 잠금 실패"))
     }
 
-    /// 간선마다 현재 시간 배율. 속도 배율과 돌발 배율의 곱이다
+    /// 간선마다 현재 시간 배율. 속도 배율과 가변속도 배율 중 큰 값에 돌발 배율을 곱한 값이다
     pub fn factors(&self) -> Vec<f32> {
-        let (speed, incident) = &*self.factors.read().expect("factors 잠금 실패");
-        speed.iter().zip(incident).map(|(s, i)| s * i).collect()
+        self.factors.read().expect("factors 잠금 실패").time()
     }
 
     /// LINK_ID의 간선 번호
@@ -620,27 +649,25 @@ impl RouteDb {
         let started = Instant::now();
         let (applied, unknown, blocked, factors) = {
             let mut guard = self.factors.write().expect("factors 잠금 실패");
-            let (speed, incident) = &mut *guard;
             let (mut applied, mut unknown) = (0, 0);
             for update in updates {
                 match self.edge_of_link.get(&update.link_id) {
                     Some(&e) => {
                         if let Some(f) = update.speed_factor {
-                            speed[e as usize] = f;
+                            guard.speed[e as usize] = f;
                         }
                         if let Some(f) = update.incident_factor {
-                            incident[e as usize] = f;
+                            guard.incident[e as usize] = f;
+                        }
+                        if let Some(f) = update.vsl_factor {
+                            guard.vsl[e as usize] = f;
                         }
                         applied += 1;
                     }
                     None => unknown += 1,
                 }
             }
-            let factors: Vec<f32> = speed
-                .iter()
-                .zip(incident.iter())
-                .map(|(s, i)| s * i)
-                .collect();
+            let factors = guard.time();
             let blocked = factors.iter().filter(|f| f.is_infinite()).count();
             (applied, unknown, blocked, factors)
         };
@@ -660,16 +687,12 @@ impl RouteDb {
         let (blocked, factors) = {
             let mut guard = self.factors.write().expect("factors 잠금 실패");
             let target = match kind {
-                FactorKind::Speed => &mut guard.0,
-                FactorKind::Incident => &mut guard.1,
+                FactorKind::Speed => &mut guard.speed,
+                FactorKind::Incident => &mut guard.incident,
+                FactorKind::Vsl => &mut guard.vsl,
             };
             target.iter_mut().for_each(|f| *f = 1.0);
-            let factors: Vec<f32> = guard
-                .0
-                .iter()
-                .zip(guard.1.iter())
-                .map(|(s, i)| s * i)
-                .collect();
+            let factors = guard.time();
             let blocked = factors.iter().filter(|f| f.is_infinite()).count();
             (blocked, factors)
         };
@@ -686,8 +709,7 @@ impl RouteDb {
     /// 실시간 배율을 모두 1.0으로 되돌리고 파일에서 연 정적 metric으로 돌아간다
     pub fn reset_weights(&self) {
         let mut guard = self.factors.write().expect("factors 잠금 실패");
-        guard.0.iter_mut().for_each(|f| *f = 1.0);
-        guard.1.iter_mut().for_each(|f| *f = 1.0);
+        *guard = Factors::new(guard.speed.len());
         drop(guard);
         *self.metrics.write().expect("metrics 잠금 실패") = Arc::clone(&self.base_metrics);
     }
@@ -753,12 +775,10 @@ impl RouteDb {
         let factors: Vec<f32> = {
             let guard = self.factors.read().expect("factors 잠금 실패");
             guard
-                .0
-                .iter()
-                .zip(guard.1.iter())
+                .time()
+                .into_iter()
                 .enumerate()
-                .map(|(e, (s, i))| {
-                    let f = s * i;
+                .map(|(e, f)| {
                     if penalized[e] {
                         f * ALTERNATIVE_PENALTY as f32
                     } else {
@@ -1020,9 +1040,8 @@ impl RouteDb {
         let (length, max_spd) = (file.length(), file.max_spd());
         let (from_frac, to_frac) = (self.fraction(&from), self.fraction(&to));
         let single = edges.len() == 1;
-        // 소통정보 속도 배율. 제한속도 시간에 곱하면 통행 속도로 지나는 시간이다. 돌발 배율은 경로 선택용이라 곱하지 않는다
+        // 소통정보 속도 배율과 가변속도 배율 중 큰 값. 제한속도 시간에 곱하면 통행 속도로 지나는 시간이다. 돌발 배율은 경로 선택용이라 곱하지 않는다
         let factors = self.factors.read().expect("factors 잠금 실패");
-        let speed = &factors.0;
         let mut speeds = Vec::with_capacity(edges.len());
         let mut geometry = Vec::new();
         let mut pois = Vec::new();
@@ -1054,11 +1073,12 @@ impl RouteDb {
                 bridged: i > 0 && self.tail[e] != file.head()[edges[i - 1] as usize],
             });
             geometry.extend(piece.iter().skip(if geometry.is_empty() { 0 } else { 1 }));
-            duration_ms += profile::link_time_ms(length, max_spd, e) * part * speed[e] as f64;
+            let speed = factors.speed(e);
+            duration_ms += profile::link_time_ms(length, max_spd, e) * part * speed as f64;
             speeds.push(SpeedSpan {
                 from_m: walked,
                 to_m: walked + part * length[e],
-                kmh: max_spd[e] as f64 / speed[e] as f64,
+                kmh: max_spd[e] as f64 / speed as f64,
             });
             // 요금소
             let cur = file.tolls_of(e);

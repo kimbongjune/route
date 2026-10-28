@@ -5,6 +5,7 @@ pub mod handler;
 pub mod incident;
 pub mod traffic;
 pub mod utic;
+pub mod vsl;
 
 use std::convert::Infallible;
 use std::sync::Arc;

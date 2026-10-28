@@ -15,6 +15,7 @@ use crate::caution::rest::RestHit;
 use crate::caution::risk::{RiskHit, element_text, grade_text};
 use crate::caution::section::CautionSection;
 use crate::caution::zone::{self, ZoneKind, ZoneSection};
+use crate::collector::vsl::VslHit;
 use crate::guideline::GuideLineTable;
 
 /// 안내 지점 한 곳의 안내문
@@ -67,6 +68,8 @@ pub enum WarningKind {
     Disaster,
     /// 돌발(국가교통정보센터 돌발상황·UTIC 돌발정보의 사고·공사·통제 등)
     Incident,
+    /// 가변속도제한으로 제한속도가 낮아진 구간
+    VariableSpeed,
     /// 어린이보호구역
     SchoolZone,
     /// 노인보호구역
@@ -200,6 +203,7 @@ pub struct Cautions<'a> {
     pub notices: &'a [NoticeHit],
     pub disasters: &'a [DisasterHit],
     pub incidents: &'a [IncidentHit],
+    pub vsl: &'a [VslHit],
 }
 
 /// 사고다발 구간은 구간 사고 건수 합이 이 값 이상일 때만 경고한다. 사고 건수가 없는 TAAS 폴리곤만 있는 구간은 경고하지 않는다
@@ -392,6 +396,17 @@ pub fn warnings(route: &Route, cautions: &Cautions, toll: &TollFee) -> Vec<Warni
             at_m: Some(hit.at_m),
             to_m: None,
             text,
+        });
+    }
+    for hit in cautions.vsl {
+        along.push(Warning {
+            kind: WarningKind::VariableSpeed,
+            at_m: Some(hit.at_m),
+            to_m: None,
+            text: format!(
+                "가변 제한속도 {}km/h (평소 {}km/h)",
+                hit.vsl.limit, hit.vsl.default
+            ),
         });
     }
     for hit in cautions.notices {

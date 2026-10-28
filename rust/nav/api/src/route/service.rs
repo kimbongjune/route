@@ -89,6 +89,9 @@ fn decorate(mut route: Route, extras: &RouteExtras, elapsed_ms: f64) -> RouteRes
     let incidents = extras
         .incidents
         .hits(&route.links, &route.geometry, route.distance_m);
+    let vsl = extras
+        .vsl
+        .hits(&route.links, &route.geometry, route.distance_m);
     let disasters = extras.disasters.hits(
         &route.links,
         &route.geometry,
@@ -114,6 +117,7 @@ fn decorate(mut route: Route, extras: &RouteExtras, elapsed_ms: f64) -> RouteRes
         notices: &notices,
         disasters: &disasters,
         incidents: &incidents,
+        vsl: &vsl,
     };
     let warnings = guidance::warnings(&route, &cautions, &toll);
     RouteResponse {

@@ -16,6 +16,7 @@ use crate::caution::rest::RestAreaIndex;
 use crate::caution::risk::RiskStore;
 use crate::caution::section::SectionIndex;
 use crate::caution::zone::ZoneIndex;
+use crate::collector::vsl::VslStore;
 use crate::collector::{UpdateSender, WeightEvent};
 use crate::guideline::GuideLineTable;
 
@@ -49,6 +50,8 @@ pub struct AppState {
     pub disasters: Arc<DisasterStore>,
     /// 돌발정보(국가교통정보센터·UTIC) 경고용 목록. 돌발정보 폴링 태스크가 바꾼다
     pub incidents: Arc<IncidentStore>,
+    /// 제한속도가 낮아진 가변속도제한 링크. 가변속도제한 폴링 태스크가 바꾼다
+    pub vsl: Arc<VslStore>,
     /// 지오코더 색인
     pub geocoder: Arc<GeocodeIndex>,
     /// 통행료 영업소·요금표
@@ -82,6 +85,7 @@ pub struct RouteExtras {
     pub notices: Arc<NoticeStore>,
     pub disasters: Arc<DisasterStore>,
     pub incidents: Arc<IncidentStore>,
+    pub vsl: Arc<VslStore>,
 }
 
 impl AppState {
@@ -101,6 +105,7 @@ impl AppState {
             notices: Arc::clone(&self.notices),
             disasters: Arc::clone(&self.disasters),
             incidents: Arc::clone(&self.incidents),
+            vsl: Arc::clone(&self.vsl),
         }
     }
 }
